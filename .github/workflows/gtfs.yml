@@ -1,0 +1,22 @@
+name: Aktualizacja GTFS (statyczny)
+on:
+  schedule:
+    - cron: "17 1 * * *"     # codziennie ok. 03:17 czasu polskiego
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python3 tools/build_static.py --out data
+      - name: Commit
+        run: |
+          git config user.name "gtfs-bot"
+          git config user.email "gtfs-bot@users.noreply.github.com"
+          git add -A data
+          git diff --cached --quiet || git commit -m "GTFS $(date -u +%F)"
+          git push
