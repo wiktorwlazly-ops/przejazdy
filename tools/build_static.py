@@ -31,6 +31,17 @@ def read_csv(z, name):
     return list(csv.DictReader(io.StringIO(txt)))
 
 
+def hms_to_sec(s):
+    p = (s or "").strip().split(":")
+    if len(p) < 2:
+        return None
+    return int(p[0]) * 3600 + int(p[1]) * 60 + (int(p[2]) if len(p) > 2 and p[2] else 0)
+
+
+def safe_name(route_key):
+    return re.sub(r"[^A-Za-z0-9_-]", "_", route_key.replace(":", "_"))
+
+
 def hms_to_min(s):
     p = (s or "").strip().split(":")
     if len(p) < 2:
@@ -79,6 +90,7 @@ def main():
     trips_out = {}
     dep = {d: {} for d in days[1:]}
     feeds_ok = []
+    sched = {}   # route_key -> {"stops": [...], "si": {stop: idx}, "trips": {tid: {...}}, "act": {date: set(service)}}
 
     def ridx(rid):
         if rid not in route_idx:
@@ -130,10 +142,29 @@ def main():
             trips_out[f"{feed}:{tid}"] = [ridx(rid), hidx(hs), block]
 
         act = {d: active_services(z, d) for d in days}
+        any_act = set().union(*act.values()) if act else set()
         for r in read_csv(z, "stop_times.txt"):
             ti = trip_info.get(r["trip_id"])
             if not ti:
                 continue
+            # pełny rozkład kursu (do odchyleń od rozkładu) – tylko kursy aktywne w oknie dat
+            if ti[2] in any_act:
+                sc = sched.setdefault(ti[0], {"stops": [], "si": {}, "trips": {}, "act": {}})
+                sk0 = f"{feed}:{r['stop_id']}"
+                if sk0 not in sc["si"]:
+                    sc["si"][sk0] = len(sc["stops"]); sc["stops"].append(sk0)
+                tr = sc["trips"].setdefault(r["trip_id"], {"s": ti[2], "h": ti[1], "t": []})
+                a_s = hms_to_sec(r.get("arrival_time") or r.get("departure_time"))
+                d_s = hms_to_sec(r.get("departure_time") or r.get("arrival_time"))
+                try:
+                    seq = int(r.get("stop_sequence") or 0)
+                except ValueError:
+                    seq = 0
+                if a_s is not None:
+                    tr["t"].append([seq, sc["si"][sk0], a_s, d_s])
+                for d in days:
+                    if ti[2] in act[d]:
+                        sc["act"].setdefault(d.strftime("%Y%m%d"), set()).add(ti[2])
             m = hms_to_min(r.get("departure_time") or r.get("arrival_time"))
             if m is None:
                 continue
@@ -157,6 +188,17 @@ def main():
                                     ensure_ascii=False, separators=(",", ":"))
     w("stops.json", {"generated": gen, "feeds": feeds_ok, "routes": routes_out, "stops": stops_out})
     w("trips.json", {"generated": gen, "routes": route_list, "heads": head_list, "trips": trips_out})
+    # rozkład kursów per linia: data/sched/<linia>.json
+    sdir = os.path.join(a.out, "sched"); os.makedirs(sdir, exist_ok=True)
+    for f in os.listdir(sdir):
+        os.remove(os.path.join(sdir, f))
+    for rk, sc in sched.items():
+        trips = {}
+        for tid, tr in sc["trips"].items():
+            tr["t"].sort()
+            trips[tid] = [tr["s"], tr["h"], [[x[1], x[2], x[3]] for x in tr["t"]]]
+        json.dump({"route": rk, "stops": sc["stops"], "act": {k: sorted(v) for k, v in sc["act"].items()}, "trips": trips},
+                  open(os.path.join(sdir, safe_name(rk) + ".json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     files = []
     for d, st in dep.items():
         for s in st.values():
