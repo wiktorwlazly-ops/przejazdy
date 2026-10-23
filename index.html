@@ -1,0 +1,1025 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Przejazdy</title>
+<meta name="description" content="Dziennik przejazdów komunikacją miejską w Krakowie (GTFS-RT ZTP)">
+<meta name="theme-color" content="#0f1b33" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Przejazdy">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+:root{
+  --bg:#f4f1ea; --bg2:#ebe6db; --card:#fffdf8; --ink:#16213a; --ink2:#55607a; --ink3:#8a93a8;
+  --line:#ddd6c7; --tram:#2350c8; --tram-soft:#dfe7fb; --bus:#d8661c; --bus-soft:#fbe6d6;
+  --night:#4a3a8c; --ok:#1d8a5a; --warn:#c48a10; --err:#c23b30; --accent:#16213a; --accent-ink:#fffdf8;
+  --shadow:0 1px 2px rgba(22,33,58,.06),0 8px 24px rgba(22,33,58,.08);
+  --r:18px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0c1529; --bg2:#121d36; --card:#16223e; --ink:#eef1f8; --ink2:#a9b3c9; --ink3:#6f7b96;
+    --line:#26345a; --tram:#6d93ff; --tram-soft:#1d2d5c; --bus:#ff9a52; --bus-soft:#3d2a1f;
+    --night:#a594ff; --ok:#46c88d; --warn:#f0b84a; --err:#ff6f63; --accent:#eef1f8; --accent-ink:#0c1529;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0c1529; --bg2:#121d36; --card:#16223e; --ink:#eef1f8; --ink2:#a9b3c9; --ink3:#6f7b96;
+  --line:#26345a; --tram:#6d93ff; --tram-soft:#1d2d5c; --bus:#ff9a52; --bus-soft:#3d2a1f;
+  --night:#a594ff; --ok:#46c88d; --warn:#f0b84a; --err:#ff6f63; --accent:#eef1f8; --accent-ink:#0c1529;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  padding:env(safe-area-inset-top) 0 calc(78px + env(safe-area-inset-bottom));min-height:100vh;overscroll-behavior-y:none}
+button,input,select,textarea{font:inherit;color:inherit}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+.wrap{max-width:560px;margin:0 auto;padding:0 16px}
+h1{font-size:30px;letter-spacing:-.02em;margin:0;font-weight:800}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink3);margin:26px 0 10px;font-weight:700}
+.muted{color:var(--ink2)} .faint{color:var(--ink3)} .small{font-size:13px}
+.top{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;padding:18px 0 6px}
+.top small{display:block;color:var(--ink3);font-size:13px;font-weight:600}
+#today-lbl{text-transform:capitalize}
+.chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:99px;background:var(--card);
+  border:1px solid var(--line);font-size:12px;font-weight:600;color:var(--ink2);white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ink3)}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+/* hero */
+.hero{margin-top:14px;padding:26px 20px 22px;text-align:center;position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:auto -40px -120px -40px;height:220px;border-radius:50%;
+  background:radial-gradient(closest-side,var(--tram-soft),transparent);opacity:.9}
+.hero>*{position:relative}
+.clock{font-size:54px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.clock .s{color:var(--ink3)}
+.go{margin:22px auto 6px;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;max-width:340px;
+  height:64px;border:0;border-radius:20px;background:var(--accent);color:var(--accent-ink);font-size:19px;font-weight:750;
+  box-shadow:0 10px 30px -8px rgba(22,33,58,.45);cursor:pointer;transition:transform .12s}
+.go:active{transform:scale(.97)}
+.go svg{width:22px;height:22px}
+.go.end{background:var(--err);color:#fff;box-shadow:0 10px 30px -8px rgba(194,59,48,.55)}
+.go.ghost{background:transparent;color:var(--ink2);box-shadow:none;height:44px;font-size:15px;font-weight:600;margin-top:4px}
+.today{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+.kpi{padding:14px 14px 12px}
+.kpi b{display:block;font-size:22px;font-weight:800;letter-spacing:-.02em}
+.kpi span{font-size:12px;color:var(--ink3);font-weight:600}
+/* live ride */
+.live{margin-top:14px;padding:20px;position:relative;overflow:hidden}
+.live .stripe{position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--tram)}
+.live.A .stripe{background:var(--bus)}
+.live-head{display:flex;gap:14px;align-items:center}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:46px;height:34px;padding:0 9px;border-radius:10px;
+  background:var(--tram);color:#fff;font-weight:800;font-size:18px;letter-spacing:-.01em}
+.badge.A{background:var(--bus)} .badge.N{background:var(--night)} .badge.x{background:var(--ink3)}
+.badge.sm{min-width:38px;height:28px;font-size:15px;border-radius:8px}
+.badge.lg{min-width:62px;height:46px;font-size:24px;border-radius:13px}
+.timer{font-size:58px;font-weight:800;letter-spacing:-.03em;text-align:center;margin:18px 0 6px;line-height:1}
+.route{display:grid;grid-template-columns:18px 1fr;gap:4px 10px;margin-top:14px}
+.route .pin{width:12px;height:12px;border-radius:50%;border:3px solid var(--tram);margin-top:5px;background:var(--card)}
+.route .pin.end{border-color:var(--ink3);border-style:dashed}
+.route .bar{width:3px;background:var(--line);margin:0 auto;height:16px}
+.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.meta .chip{background:var(--bg2)}
+/* list */
+.day{position:sticky;top:0;z-index:2;background:var(--bg);padding:14px 2px 8px;font-size:13px;font-weight:700;color:var(--ink3);
+  display:flex;justify-content:space-between}
+.ride{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:12px 14px;margin-bottom:8px;cursor:pointer}
+.ride .stops{font-weight:650;font-size:15px;line-height:1.25}
+.ride .stops i{font-style:normal;color:var(--ink3);margin:0 4px}
+.ride .sub{font-size:12.5px;color:var(--ink3);margin-top:3px}
+.ride .dur{text-align:right;font-weight:750}
+.ride .dur small{display:block;font-weight:600;color:var(--ink3);font-size:12px}
+.pend{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--warn);margin-left:6px;vertical-align:middle}
+.search{display:flex;gap:8px;margin:12px 0 2px}
+input.f,select.f,textarea.f{width:100%;height:46px;border-radius:12px;border:1px solid var(--line);background:var(--card);padding:0 13px;
+  outline:none;-webkit-appearance:none;appearance:none}
+textarea.f{height:76px;padding:10px 13px;resize:vertical}
+input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shadow:0 0 0 3px var(--tram-soft)}
+.btn{height:46px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:var(--card);font-weight:650;cursor:pointer;white-space:nowrap}
+.btn.pri{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.btn.danger{color:var(--err)}
+.btn.sm{height:36px;padding:0 12px;font-size:14px;border-radius:10px}
+.btn:active{opacity:.8}
+.more{display:block;margin:14px auto;}
+/* sheet */
+.backdrop{position:fixed;inset:0;background:rgba(8,14,28,.45);opacity:0;pointer-events:none;transition:opacity .2s;z-index:40}
+.backdrop.on{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:41;max-height:92vh;overflow:auto;background:var(--bg);border-radius:24px 24px 0 0;
+  transform:translateY(105%);transition:transform .28s cubic-bezier(.2,.8,.2,1);padding:8px 0 calc(20px + env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling:touch;visibility:hidden}
+.sheet.on{transform:none;visibility:visible}
+.grab{width:40px;height:5px;border-radius:3px;background:var(--line);margin:4px auto 10px}
+.sheet h3{font-size:22px;margin:4px 0 2px;letter-spacing:-.01em}
+.field{margin-top:14px}
+.field>label{display:block;font-size:12.5px;font-weight:700;color:var(--ink2);margin:0 0 6px 2px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.inl{display:flex;gap:8px}
+.cands{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.cand{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:8px 12px;cursor:pointer;text-align:left;font-size:14px}
+.cand b{font-weight:700} .cand small{display:block;color:var(--ink3);font-size:11.5px;margin-top:1px}
+.tags{display:flex;flex-wrap:wrap;gap:8px}
+.tag{border:1px solid var(--line);background:var(--card);border-radius:99px;padding:8px 14px;font-size:14px;font-weight:600;cursor:pointer;color:var(--ink2)}
+.tag.sel{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.tag .ic{margin-right:5px}
+.cand.sel{border-color:var(--tram);box-shadow:0 0 0 3px var(--tram-soft)}
+.sug{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;width:100%;padding:12px;border-radius:14px;
+  border:1px solid var(--line);background:var(--card);margin-top:8px;cursor:pointer;text-align:left}
+.sug.sel{border-color:var(--tram);box-shadow:0 0 0 3px var(--tram-soft)}
+.sug .h{font-weight:700;font-size:15px}
+.sug .d{font-size:12.5px;color:var(--ink3);margin-top:2px}
+.src{font-size:11px;font-weight:700;padding:3px 7px;border-radius:6px;background:var(--bg2);color:var(--ink2);white-space:nowrap}
+.src.gps{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.src.tu{background:color-mix(in srgb,var(--tram) 18%,transparent);color:var(--tram)}
+.src.st{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2);margin-top:8px;min-height:20px}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--tram);animation:sp 0.8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.actions{display:flex;gap:10px;margin-top:20px}
+.actions .btn{flex:1;height:52px;font-size:16px}
+/* tabs */
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;justify-content:space-around;
+  padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:color-mix(in srgb,var(--bg) 82%,transparent);
+  backdrop-filter:saturate(1.6) blur(18px);-webkit-backdrop-filter:saturate(1.6) blur(18px);border-top:1px solid var(--line)}
+.tab{flex:1;max-width:110px;border:0;background:none;display:flex;flex-direction:column;align-items:center;gap:3px;
+  font-size:11px;font-weight:650;color:var(--ink3);padding:4px 0;cursor:pointer}
+.tab svg{width:24px;height:24px}
+.tab.on{color:var(--ink)}
+.view{display:none}.view.on{display:block}
+/* stats */
+.seg{display:flex;background:var(--bg2);border-radius:12px;padding:3px;gap:2px;overflow-x:auto;margin-top:12px}
+.seg button{flex:1;border:0;background:none;padding:8px 10px;border-radius:9px;font-size:13.5px;font-weight:650;color:var(--ink2);white-space:nowrap;cursor:pointer}
+.seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.kgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.split{height:10px;border-radius:6px;overflow:hidden;display:flex;background:var(--bg2);margin-top:10px}
+.split i{display:block;height:100%}
+.bars{padding:12px 14px}
+.brow{display:grid;grid-template-columns:minmax(64px,auto) 1fr 44px;gap:10px;align-items:center;padding:5px 0;font-size:14px}
+.brow .lbl{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.bars.wide .brow{grid-template-columns:minmax(0,1.6fr) 1fr 36px}
+.bars.wide .brow .lbl{max-width:none;font-size:13px}
+.brow .trk{height:10px;background:var(--bg2);border-radius:6px;overflow:hidden}
+.brow .trk i{display:block;height:100%;background:var(--tram);border-radius:6px}
+.brow .trk i.A{background:var(--bus)}
+.brow .v{text-align:right;font-weight:700;color:var(--ink2)}
+.cols{display:flex;align-items:flex-end;gap:3px;height:140px;padding:14px 12px 0}
+.cols .c{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;min-width:0}
+.cols .c i{display:block;width:100%;background:var(--tram);border-radius:4px 4px 2px 2px;min-height:2px}
+.cols .c.alt i{background:var(--ink3)}
+.cols-x{display:flex;gap:3px;padding:6px 12px 12px;font-size:10.5px;color:var(--ink3)}
+.cols-x span{flex:1;text-align:center;min-width:0;overflow:hidden}
+.empty{text-align:center;padding:40px 20px;color:var(--ink3)}
+.toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translate(-50%,20px);opacity:0;z-index:60;
+  background:var(--accent);color:var(--accent-ink);padding:11px 16px;border-radius:12px;font-size:14px;font-weight:600;
+  transition:all .25s;pointer-events:none;max-width:90vw;text-align:center}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.set .card{padding:4px 14px 14px;margin-bottom:12px}
+.hint{font-size:12.5px;color:var(--ink3);margin-top:6px;line-height:1.45}
+.diag{font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all;background:var(--bg2);
+  border-radius:12px;padding:10px;margin-top:10px;max-height:360px;overflow:auto}
+.sw{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:14px}
+.sw input{width:22px;height:22px}
+@media (max-width:360px){.clock{font-size:44px}.timer{font-size:48px}}
+</style>
+</head>
+<body>
+
+<!-- ============ PRZEJAZD ============ -->
+<main id="v-ride" class="view on">
+  <div class="wrap">
+    <div class="top">
+      <div><small id="today-lbl"></small><h1>Przejazdy</h1></div>
+      <div class="chips" id="chips"></div>
+    </div>
+    <div id="ride-main"></div>
+  </div>
+</main>
+
+<!-- ============ HISTORIA ============ -->
+<main id="v-hist" class="view">
+  <div class="wrap">
+    <div class="top"><div><small id="hist-count"></small><h1>Historia</h1></div>
+      <button class="btn sm" id="btn-add">+ Dodaj</button></div>
+    <div class="search"><input class="f" id="q" type="search" placeholder="Szukaj: linia, przystanek, pojazd, data…" autocomplete="off"></div>
+    <div id="hist-list"></div>
+  </div>
+</main>
+
+<!-- ============ STATYSTYKI ============ -->
+<main id="v-stats" class="view">
+  <div class="wrap">
+    <div class="top"><div><small id="stats-sub"></small><h1>Statystyki</h1></div></div>
+    <div class="seg" id="stats-seg"></div>
+    <div id="stats-body"></div>
+  </div>
+</main>
+
+<!-- ============ USTAWIENIA ============ -->
+<main id="v-set" class="view set">
+  <div class="wrap">
+    <div class="top"><div><small>konfiguracja</small><h1>Ustawienia</h1></div></div>
+    <h2>Arkusz Google (Apps Script)</h2>
+    <div class="card">
+      <div class="field"><label>Adres aplikacji internetowej (…/exec)</label><input class="f" id="s-backend" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off"></div>
+      <div class="field"><label>Klucz (APP_KEY)</label><input class="f" id="s-key" type="password" autocomplete="off"></div>
+      <div class="inl" style="margin-top:12px"><button class="btn sm" id="b-test">Testuj połączenie</button><button class="btn sm" id="b-pull">Pobierz z arkusza</button><button class="btn sm" id="b-sync">Wyślij zaległe</button></div>
+      <div class="hint" id="s-sync-info"></div>
+    </div>
+    <h2>Lokalizacja i GTFS</h2>
+    <div class="card">
+      <div class="row2">
+        <div class="field"><label>Bufor przystanku [m]</label><input class="f num" id="s-buffer" type="number" inputmode="numeric" min="5" max="200"></div>
+        <div class="field"><label>Promień szukania pojazdu [m]</label><input class="f num" id="s-vrad" type="number" inputmode="numeric" min="10" max="500"></div>
+      </div>
+      <div class="field"><label>Pobieranie GTFS-RT</label>
+        <select class="f" id="s-rtmode"><option value="auto">Automatycznie (bezpośrednio, a gdy się nie da – przez Apps Script)</option><option value="proxy">Zawsze przez Apps Script</option><option value="direct">Zawsze bezpośrednio z ZTP</option></select></div>
+      <div class="field"><label>Źródła (kanały ZTP)</label>
+        <div class="inl"><label class="chip"><input type="checkbox" id="s-fA"> A – autobusy</label><label class="chip"><input type="checkbox" id="s-fT"> T – tramwaje</label><label class="chip"><input type="checkbox" id="s-fM"> M</label></div></div>
+      <div class="field"><label>Numer taborowy z pola</label>
+        <select class="f" id="s-vfield"><option value="auto">Automatycznie (label → license_plate → id)</option><option value="label">vehicle.label</option><option value="license_plate">vehicle.license_plate</option><option value="id">vehicle.id</option></select></div>
+      <div class="field"><label>Brygada</label>
+        <select class="f" id="s-brule"><option value="auto">Automatycznie z bloku (np. 506 → linia 50, bryg. 6)</option><option value="block">Numer bloku bez zmian</option><option value="regex">Wyrażenie regularne na trip_id</option></select>
+        <input class="f" id="s-bregex" style="margin-top:8px" placeholder="np. block_(\d+)_ — grupa 1 = brygada" autocapitalize="off"></div>
+      <div class="sw"><span>Brygadę zapisuj tylko dla tramwajów</span><input type="checkbox" id="s-btram"></div>
+      <div class="field"><label>Numer słupka przystanku</label>
+        <select class="f" id="s-post"><option value="code">Z pola stop_code (np. „Rondo Mogilskie 05”)</option><option value="code2">Ostatnie 2 cyfry stop_code</option><option value="idre">Wyrażenie regularne na stop_id</option><option value="off">Bez numeru słupka – sama nazwa</option></select>
+        <input class="f" id="s-postre" style="margin-top:8px" placeholder="np. (\d{2})$ — grupa 1 = słupek" autocapitalize="off"></div>
+      <div class="sw"><span>W statystykach łącz słupki jednego przystanku</span><input type="checkbox" id="s-postmerge"></div>
+      <div class="field"><label>Katalog danych statycznego GTFS</label><input class="f" id="s-data" autocapitalize="off"></div>
+      <div class="hint" id="s-static-info"></div>
+      <div class="inl" style="margin-top:12px"><button class="btn sm" id="b-diag">Diagnostyka GTFS-RT w pobliżu</button></div>
+      <div id="diag"></div>
+    </div>
+    <h2>Dane</h2>
+    <div class="card">
+      <div class="field"><label>Motyw</label><select class="f" id="s-theme"><option value="">Systemowy</option><option value="light">Jasny</option><option value="dark">Ciemny</option></select></div>
+      <div class="inl" style="margin-top:12px;flex-wrap:wrap"><button class="btn sm" id="b-csv">Eksport CSV</button><button class="btn sm danger" id="b-wipe">Wyczyść dane lokalne</button></div>
+      <div class="hint">Przejazdy są trzymane w telefonie i wysyłane do arkusza. Aplikację dodaj do ekranu początkowego (Safari → Udostępnij → „Do ekranu początkowego”), wtedy iOS nie usuwa jej danych.</div>
+    </div>
+    <div class="hint" style="text-align:center;margin:20px 0" id="ver"></div>
+  </div>
+</main>
+
+<nav class="tabs">
+  <button class="tab on" data-v="ride"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="15" rx="3"/><path d="M5 11h14M9 21l-1.5-3M15 21l1.5-3"/><circle cx="9" cy="14.5" r=".6" fill="currentColor"/><circle cx="15" cy="14.5" r=".6" fill="currentColor"/></svg>Przejazd</button>
+  <button class="tab" data-v="hist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>Historia</button>
+  <button class="tab" data-v="stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Statystyki</button>
+  <button class="tab" data-v="set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Ustawienia</button>
+</nav>
+
+<div class="backdrop" id="backdrop"></div>
+<div class="sheet" id="sheet"><div class="grab"></div><div class="wrap" id="sheet-body"></div></div>
+<div class="toast" id="toast"></div>
+<datalist id="stopnames"></datalist>
+
+<script>
+"use strict";
+const VERSION = '1.0.0';
+const RT_URL = 'https://gtfs.ztp.krakow.pl/';
+const LS_KEY = 'przejazdy.v1';
+const DEFAULTS = { backend:'', key:'', dataUrl:'./data/', buffer:20, vehRadius:60, rtMode:'auto',
+  feeds:['A','T'], vehField:'auto', brigadeRule:'auto', brigadeRegex:'', brigadeTramsOnly:true, theme:'', postMode:'code', postRegex:'', postMerge:true };
+
+/* ---------------- stan ---------------- */
+const S = { settings:{...DEFAULTS}, rides:[], active:null, lastPull:0, statsRange:'all' };
+function load(){
+  try{
+    const j = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    S.settings = {...DEFAULTS, ...(j.settings||{})};
+    S.rides = j.rides || []; S.active = j.active || null; S.lastPull = j.lastPull || 0;
+  }catch(e){ console.warn('storage', e); }
+}
+function save(){
+  try{ localStorage.setItem(LS_KEY, JSON.stringify({settings:S.settings, rides:S.rides, active:S.active, lastPull:S.lastPull})); }
+  catch(e){ toast('Nie udało się zapisać w pamięci telefonu'); }
+}
+
+/* ---------------- narzędzia ---------------- */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad = n => String(n).padStart(2,'0');
+const fmtTime = d => pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+const fmtDate = d => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+function parseTime(s){ const m = String(s||'').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/); if(!m) return null;
+  const h=+m[1], mi=+m[2], se=+(m[3]||0); if(h>47||mi>59||se>59) return null; return h*3600+mi*60+se; }
+function normTimeInput(s){
+  s = String(s||'').trim(); if(!s) return '';
+  if(/^\d{3,6}$/.test(s)){ s = s.padStart(s.length<=4?4:6,'0'); return s.slice(0,2)+':'+s.slice(2,4)+':'+(s.slice(4,6)||'00'); }
+  const m = s.match(/^(\d{1,2})[:.](\d{1,2})(?:[:.](\d{1,2}))?$/); if(!m) return s;
+  return pad(+m[1])+':'+pad(+m[2])+':'+pad(+(m[3]||0));
+}
+function durSec(r){ const a=parseTime(r.dep), b=parseTime(r.arr); if(a==null||b==null) return null; let d=b-a; if(d<0) d+=86400; return d; }
+function fmtDur(sec, long){ if(sec==null) return '–'; const h=Math.floor(sec/3600), m=Math.floor(sec%3600/60), s=sec%60;
+  if(long){ return h? `${h} h ${m} min` : `${m} min`; } return `${h}:${pad(m)}:${pad(s)}`; }
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id'+Date.now().toString(36)+Math.random().toString(36).slice(2));
+const PL_DAYS = ['niedziela','poniedziałek','wtorek','środa','czwartek','piątek','sobota'];
+const PL_MON = ['stycznia','lutego','marca','kwietnia','maja','czerwca','lipca','sierpnia','września','października','listopada','grudnia'];
+const PL_MON_S = ['sty','lut','mar','kwi','maj','cze','lip','sie','wrz','paź','lis','gru'];
+function dayLabel(iso){ const d=new Date(iso+'T12:00:00'); if(isNaN(d)) return iso; const w=PL_DAYS[d.getDay()]; return `${w[0].toUpperCase()+w.slice(1)}, ${d.getDate()} ${PL_MON[d.getMonth()]} ${d.getFullYear()}`; }
+function dist(a,b){ const R=6371000, toR=Math.PI/180; const dLat=(b.lat-a.lat)*toR, dLon=(b.lon-a.lon)*toR;
+  const x=Math.sin(dLat/2)**2+Math.cos(a.lat*toR)*Math.cos(b.lat*toR)*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(x)); }
+function modeOf(line, hint){
+  if(hint==='T'||hint==='A') return hint;
+  const s = String(line||'').trim(); if(/^\d+$/.test(s)) return (+s < 100) ? 'T' : 'A'; return 'A';
+}
+function badgeCls(line, mode){ const s=String(line||''); if(!s) return 'x'; const m=modeOf(s,mode);
+  if(/^\d+$/.test(s) && ((m==='A' && +s>=600 && +s<700) || (m==='T' && +s>=62 && +s<=69))) return 'N'; return m; }
+/* ---- uwagi: szybkie znaczniki ---- */
+const TAGS = [ {k:'kontrola', ic:'🎫', t:()=> 'kontrola biletów'},
+  {k:'rezerwa', ic:'🔁', t:m=> (m==='A'?'autobus':'tramwaj')+' rezerwowy'},
+  {k:'stop', ic:'⏸', t:()=> 'zatrzymanie w ruchu'} ];
+function parseNotes(str){
+  const tags=new Set(), rest=[];
+  for(const part of String(str||'').split(/\s*;\s*/).filter(Boolean)){
+    const low=part.toLowerCase();
+    if(low==='kontrola biletów') tags.add('kontrola');
+    else if(/^(tramwaj|autobus|pojazd) rezerwowy$/.test(low)) tags.add('rezerwa');
+    else if(low==='zatrzymanie w ruchu') tags.add('stop');
+    else rest.push(part);
+  }
+  return {tags, other:rest.join('; ')};
+}
+function composeNotes(tags, other, mode){
+  return [...TAGS.filter(x=>tags.has(x.k)).map(x=>x.t(mode)), String(other||'').trim()].filter(Boolean).join('; ');
+}
+function notesHtml(notes, mode){
+  const n=parseNotes(notes); const open=!!n.other;
+  return `<div class="field notes-box"><label>Uwagi</label><div class="tags">
+    ${TAGS.map(x=>`<button type="button" class="tag ${n.tags.has(x.k)?'sel':''}" data-tag="${x.k}"><span class="ic">${x.ic}</span>${esc(x.t(mode))}</button>`).join('')}
+    <button type="button" class="tag ${open?'sel':''}" data-tag="inne"><span class="ic">✎</span>inne</button></div>
+    <textarea class="f notes-other" style="margin-top:8px;${open?'':'display:none'}" placeholder="opisz…">${esc(n.other)}</textarea></div>`;
+}
+function bindNotes(root, onChange){
+  root.querySelectorAll('[data-tag]').forEach(b=>b.onclick=()=>{ b.classList.toggle('sel');
+    if(b.dataset.tag==='inne'){ const t=root.querySelector('.notes-other'); const on=b.classList.contains('sel'); t.style.display=on?'':'none'; if(on) t.focus(); else t.value=''; }
+    onChange && onChange(); });
+  const t=root.querySelector('.notes-other'); if(t && onChange) t.onchange=onChange;
+}
+function readNotes(root, mode){
+  const box=root.querySelector('.notes-box'); if(!box) return undefined;
+  const tags=new Set([...box.querySelectorAll('[data-tag].sel')].map(b=>b.dataset.tag).filter(k=>k!=='inne'));
+  return composeNotes(tags, box.querySelector('.notes-other')?.value, mode);
+}
+
+let toastT; function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('on'),2600); }
+async function fetchT(url, opt={}, ms=10000){ const c=new AbortController(); const t=setTimeout(()=>c.abort(),ms);
+  try{ return await fetch(url,{...opt,signal:c.signal}); } finally{ clearTimeout(t); } }
+
+/* ---------------- dane statyczne ---------------- */
+const G = { stops:[], routes:{}, trips:null, tripsP:null, dep:{}, generated:null, ok:false, rt:{status:'–', src:null, at:0}, directOk:null };
+async function loadStatic(){
+  try{
+    const r = await fetchT(S.settings.dataUrl.replace(/\/?$/,'/')+'stops.json', {}, 15000);
+    if(!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    G.stops = j.stops.map(s=>({id:s[0], name:s[1], code:s[2], lat:s[3], lon:s[4], feed:s[5]}));
+    G.routes = j.routes || {}; G.generated = j.generated; G.ok = true;
+    G.nameSet=new Set(G.stops.map(s=>s.name));
+    const names=[...new Set([...G.stops.map(stopLabel), ...G.nameSet])].sort((a,b)=>a.localeCompare(b,'pl'));
+    $('#stopnames').innerHTML = names.map(n=>`<option value="${esc(n)}">`).join('');
+  }catch(e){ G.ok=false; console.warn('stops.json', e); }
+  renderChips();
+}
+function ensureTrips(){
+  if(G.trips) return Promise.resolve(G.trips);
+  if(!G.tripsP) G.tripsP = fetchT(S.settings.dataUrl.replace(/\/?$/,'/')+'trips.json', {}, 20000).then(r=>r.ok?r.json():null)
+    .then(j=>{ G.trips=j; return j; }).catch(()=>{ G.tripsP=null; return null; });
+  return G.tripsP;
+}
+async function loadDep(d){
+  const k = fmtDate(d).replace(/-/g,'');
+  if(G.dep[k]!==undefined) return G.dep[k];
+  try{ const r=await fetchT(S.settings.dataUrl.replace(/\/?$/,'/')+`dep-${k}.json`, {}, 20000); G.dep[k] = r.ok? await r.json() : null; }
+  catch(e){ G.dep[k]=null; }
+  return G.dep[k];
+}
+function nearStops(pos, radius){
+  const out=[]; for(const s of G.stops){ const d=dist(pos,s); if(d<=radius) out.push({...s, d}); }
+  return out.sort((a,b)=>a.d-b.d);
+}
+function postOf(s){
+  const st=S.settings; if(!s || st.postMode==='off') return '';
+  if(st.postMode==='idre'){ try{ const m=new RegExp(st.postRegex||'(\\d{2})$').exec(String(s.id).replace(/^[A-Z]:/,'')); return m? (m[1]??m[0]) : ''; }catch(e){ return ''; } }
+  let c=String(s.code||'').trim(); if(!c) return '';
+  if(st.postMode==='code2'){ const m=c.match(/(\d{2})$/); return m? m[1] : c; }
+  return /^\d$/.test(c) ? '0'+c : c;
+}
+function stopLabel(s){ const p=postOf(s); return p ? `${s.name} ${p}` : s.name; }
+function baseStopName(n){ const st=S.settings; if(st.postMode==='off') return n;
+  const names=G.nameSet; const m=String(n).match(/^(.*\S)\s+(\S{1,4})$/); return (m && (!names || names.has(m[1]))) ? m[1] : n; }
+function groupStops(list){
+  const m=new Map(); for(const s of list){ const k=stopLabel(s); const g=m.get(k); if(g){ g.ids.push(s.id); g.d=Math.min(g.d,s.d); } else m.set(k,{name:k, d:s.d, ids:[s.id]}); }
+  return [...m.values()].sort((a,b)=>a.d-b.d);
+}
+const stopById = id => G.stops.find(s=>s.id===id);
+
+/* ---------------- GTFS-RT: dekoder protobuf ---------------- */
+const TD = new TextDecoder();
+function pbParse(u8){
+  const out={}; let p=0; const n=u8.length; const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
+  const vi=()=>{ let r=0,s=0,b; do{ b=u8[p++]; r+=(b&127)*2**s; s+=7; }while(b&128 && p<n); return r; };
+  while(p<n){
+    const tag=vi(), f=Math.floor(tag/8), wt=tag&7; let v;
+    if(wt===0) v=vi();
+    else if(wt===2){ const l=vi(); v=u8.subarray(p,p+l); p+=l; }
+    else if(wt===5){ v=dv.getFloat32(p,true); p+=4; }
+    else if(wt===1){ v=dv.getFloat64(p,true); p+=8; }
+    else break;
+    (out[f]||(out[f]=[])).push(v);
+  }
+  return out;
+}
+const pbS = v => v ? TD.decode(v) : '';
+const sInt = v => v==null? null : (v>2**63 ? v-2**64 : v);
+function decTrip(u8){ if(!u8) return {}; const t=pbParse(u8); return { tripId:pbS(t[1]?.[0]), routeId:pbS(t[5]?.[0]), startTime:pbS(t[2]?.[0]), startDate:pbS(t[3]?.[0]), dir:t[6]?.[0] }; }
+function decVeh(u8){ if(!u8) return {}; const v=pbParse(u8); return { id:pbS(v[1]?.[0]), label:pbS(v[2]?.[0]), plate:pbS(v[3]?.[0]) }; }
+function decodeVP(buf, feed){
+  const f=pbParse(new Uint8Array(buf)); const out=[]; const ts=f[1]? (pbParse(f[1][0])[3]?.[0]||0) : 0;
+  for(const e of (f[2]||[])){ const en=pbParse(e); if(!en[4]) continue; const vp=pbParse(en[4][0]);
+    const pos = vp[2]? pbParse(vp[2][0]) : null; if(!pos||pos[1]==null) continue;
+    out.push({ feed, entity:pbS(en[1]?.[0]), ...decTrip(vp[1]?.[0]), veh:decVeh(vp[8]?.[0]),
+      lat:pos[1][0], lon:pos[2]?.[0], bearing:pos[3]?.[0], stopId:pbS(vp[7]?.[0]), status:vp[4]?.[0], seq:vp[3]?.[0], ts:vp[5]?.[0]||ts });
+  }
+  return out;
+}
+function decodeTU(buf, feed){
+  const f=pbParse(new Uint8Array(buf)); const out=[];
+  for(const e of (f[2]||[])){ const en=pbParse(e); if(!en[3]) continue; const tu=pbParse(en[3][0]);
+    const stus=(tu[2]||[]).map(x=>{ const s=pbParse(x); const ev=k=>{ if(!s[k]) return null; const q=pbParse(s[k][0]); return {delay:sInt(q[1]?.[0]), time:q[2]?.[0]||null}; };
+      return { seq:s[1]?.[0], stopId:pbS(s[4]?.[0]), arr:ev(2), dep:ev(3) }; });
+    out.push({ feed, ...decTrip(tu[1]?.[0]), veh:decVeh(tu[3]?.[0]), delay:sInt(tu[5]?.[0]), stus });
+  }
+  return out;
+}
+function b64ToBuf(b64){ const bin=atob(b64); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u.buffer; }
+
+const RTC = {};   // cache: nazwa -> {at, buf}
+async function getFeeds(names, maxAge=15000){
+  const now=Date.now(); const res={}; const need=[];
+  for(const n of names){ if(RTC[n] && now-RTC[n].at<maxAge) res[n]=RTC[n].buf; else need.push(n); }
+  if(!need.length) return res;
+  const st=S.settings; let src=null, errs=[];
+  const tryDirect = st.rtMode==='direct' || (st.rtMode==='auto' && G.directOk!==false);
+  if(tryDirect){
+    try{
+      const bufs = await Promise.all(need.map(n=>fetchT(RT_URL+n+'.pb?t='+now,{cache:'no-store'},8000).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.arrayBuffer(); })));
+      need.forEach((n,i)=>{ RTC[n]={at:now,buf:bufs[i]}; res[n]=bufs[i]; }); G.directOk=true; src='ZTP';
+    }catch(e){ errs.push('bezpośrednio: '+e.message); if(st.rtMode==='auto') G.directOk=false; }
+  }
+  if(!src && st.rtMode!=='direct' && st.backend){
+    try{
+      const u=`${st.backend}?action=rt&feeds=${need.join(',')}&key=${encodeURIComponent(st.key)}`;
+      const j=await (await fetchT(u,{},15000)).json(); if(!j.ok) throw new Error(j.error||'błąd');
+      for(const n of need){ if(j.feeds[n]){ const b=b64ToBuf(j.feeds[n]); RTC[n]={at:now,buf:b}; res[n]=b; } }
+      src='Apps Script';
+    }catch(e){ errs.push('przez Apps Script: '+e.message); }
+  }
+  if(!src){ G.rt={status:'err', src:null, at:now, msg:errs.join('; ')||'brak adresu Apps Script'}; renderChips(); throw new Error(G.rt.msg); }
+  G.rt={status:'ok', src, at:now}; renderChips();
+  return res;
+}
+
+/* ---------------- interpretacja kursu ---------------- */
+function tripInfo(feed, tripId){
+  const T=G.trips; if(!T||!tripId) return null; const t=T.trips[feed+':'+tripId]; if(!t) return null;
+  return { routeKey:T.routes[t[0]], headsign:T.heads[t[1]], block:t[2] };
+}
+function lineOf(feed, routeId, info){
+  const key = routeId ? feed+':'+routeId : info?.routeKey; const r = key && G.routes[key];
+  return r ? { line:String(r[0]), mode: r[1]===0||r[1]===900 ? 'T' : (feed==='T'?'T':'A') } : { line:'', mode: feed==='T'?'T':'A' };
+}
+function vehName(v){ const f=S.settings.vehField; if(f==='label') return v.label; if(f==='id') return v.id; if(f==='license_plate') return v.plate;
+  return v.label || v.plate || v.id || ''; }
+function brigadeOf(tripId, info, line){
+  const st=S.settings;
+  if(st.brigadeRule==='regex' && st.brigadeRegex){ try{ const m=new RegExp(st.brigadeRegex).exec(tripId||''); return m? (m[1]??m[0]) : ''; }catch(e){ return ''; } }
+  let block = info?.block || ((tripId||'').match(/block_(\d+)/)||[])[1] || '';
+  if(st.brigadeRule==='block' || !block) return block;
+  if(/^\d+$/.test(block) && /^\d+$/.test(line) && block.startsWith(line) && block.length-line.length>=1 && block.length-line.length<=2) return String(parseInt(block.slice(line.length),10));
+  return block;
+}
+function sugFromTrip(o){   // o: {feed, tripId, routeId, veh, ...}
+  const info=tripInfo(o.feed, o.tripId); const L=lineOf(o.feed, o.routeId, info);
+  return { feed:o.feed, tripId:o.tripId||'', routeId:o.routeId||'', line:L.line, mode:L.mode, headsign:info?.headsign||'',
+    vehicle:vehName(o.veh||{}), vehicleId:o.veh?.id||'', brigade:brigadeOf(o.tripId, info, L.line), block:info?.block||'' };
+}
+
+async function suggestLines(pos, stopGroups, onUpdate){
+  const feeds=S.settings.feeds; const ids=new Set(stopGroups.flatMap(g=>g.ids)); const out=[]; const seen=new Set(); let rtOk=false;
+  const push=(s)=>{ const k=s.tripId? s.feed+s.tripId : s.feed+s.line+s.headsign+(s.eta||''); if(seen.has(k)) return; seen.add(k); out.push(s); };
+  const tripsP = ensureTrips();
+  // 1) pozycje pojazdów
+  try{
+    const bufs = await getFeeds(feeds.map(f=>'VehiclePositions_'+f)); await tripsP; rtOk=true;
+    for(const f of feeds){ const b=bufs['VehiclePositions_'+f]; if(!b) continue;
+      for(const v of decodeVP(b,f)){ const d=dist(pos,v); const atStop = v.stopId && ids.has(f+':'+v.stopId);
+        if(d<=S.settings.vehRadius || (atStop && d<=200)) push({...sugFromTrip(v), d:Math.round(d), src:'gps', atStop, status:v.status, stopKey: v.stopId? f+':'+v.stopId : ''}); } }
+  }catch(e){ console.warn(e); }
+  out.sort((a,b)=>a.d-b.d); onUpdate && onUpdate(out.slice(), rtOk);
+  // 2) TripUpdates – odjazdy z tego przystanku w najbliższych minutach
+  if(rtOk && ids.size && out.length<2){
+    try{ const bufs=await getFeeds(feeds.map(f=>'TripUpdates_'+f), 30000); const now=Date.now()/1000;
+      for(const f of feeds){ const b=bufs['TripUpdates_'+f]; if(!b) continue;
+        for(const tu of decodeTU(b,f)){ const st=tu.stus.find(s=>ids.has(f+':'+s.stopId)); if(!st) continue;
+          const t=(st.dep||st.arr)?.time; if(!t || t<now-180 || t>now+480) continue;
+          push({...sugFromTrip(tu), eta:Math.round((t-now)/60), src:'tu'}); } }
+    }catch(e){ console.warn(e); }
+    onUpdate && onUpdate(out.slice(), rtOk);
+  }
+  // 3) rozkład statyczny – gdy RT nie działa lub nic nie znaleziono
+  if(ids.size && (!rtOk || out.length===0)){
+    const dj = await loadDep(new Date());
+    if(dj){ const now=new Date(); const nm=now.getHours()*60+now.getMinutes(); const lst=[];
+      for(const id of ids){ const s=dj.stops[id]; if(!s) continue;
+        for(const k in s){ const [ri,hi]=k.split('|').map(Number); for(const m of s[k]){ if(m>=nm-5 && m<=nm+10){
+          const rk=dj.routes[ri]; const feed=rk.split(':')[0]; const r=G.routes[rk];
+          lst.push({feed, line:r?String(r[0]):'', mode:r&&(r[1]===0||r[1]===900)?'T':(feed==='T'?'T':'A'), headsign:dj.heads[hi], eta:m-nm,
+            sched:pad(Math.floor(m/60)%24)+':'+pad(m%60), src:'st', vehicle:'', brigade:'', tripId:''}); } } } }
+      lst.sort((a,b)=>Math.abs(a.eta)-Math.abs(b.eta)).forEach(push);
+    }
+    onUpdate && onUpdate(out.slice(), rtOk);
+  }
+  return out;
+}
+
+/* ---------------- lokalizacja ---------------- */
+function locate(maxMs=8000, good=10){
+  return new Promise((res,rej)=>{
+    if(!navigator.geolocation) return rej(new Error('Brak dostępu do lokalizacji'));
+    let best=null, id=null, tm=null;
+    const finish=()=>{ navigator.geolocation.clearWatch(id); clearTimeout(tm);
+      best? res({lat:best.coords.latitude, lon:best.coords.longitude, acc:Math.round(best.coords.accuracy)}) : rej(new Error('Nie ustalono pozycji')); };
+    id=navigator.geolocation.watchPosition(p=>{ if(!best||p.coords.accuracy<best.coords.accuracy) best=p; if(p.coords.accuracy<=good) finish(); },
+      e=>{ if(!best){ navigator.geolocation.clearWatch(id); clearTimeout(tm); rej(new Error(e.code===1?'Brak zgody na lokalizację':'Błąd GPS: '+e.message)); } },
+      {enableHighAccuracy:true, maximumAge:0, timeout:maxMs});
+    tm=setTimeout(finish, maxMs);
+  });
+}
+
+/* ---------------- arkusz: synchronizacja ---------------- */
+let syncing=false;
+function payload(r){ return { id:r.id, row:r.row||null, orig:r.orig||null, date:r.date, dep:r.dep, from:r.from, line:r.line,
+  brigade:r.brigade, vehicle:r.vehicle, to:r.to, arr:r.arr, notes:r.notes }; }
+async function post(body){
+  const r=await fetchT(S.settings.backend,{method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({key:S.settings.key, ...body})},20000);
+  return r.json();
+}
+async function sync(quiet){
+  const st=S.settings; if(!st.backend||syncing) return; const queue=S.rides.filter(r=>r.sync && r.sync!=='ok'); if(!queue.length) return;
+  syncing=true; renderChips(); let done=0;
+  try{
+    for(const r of queue){
+      const res=await post({action:r.sync, ride:payload(r)});
+      if(res.ok){
+        if(r.sync==='delete'){ S.rides=S.rides.filter(x=>x!==r);
+          if(res.row) S.rides.forEach(x=>{ if(x.row && x.row>res.row) x.row--; }); }
+        else { r.row=res.row; r.sync='ok'; delete r.orig; }
+        done++; save();
+      } else if(res.error==='not_found'){
+        if(r.sync==='delete'){ S.rides=S.rides.filter(x=>x!==r); }
+        else { r.sync='add'; delete r.orig; delete r.row; }   // wiersz zniknął – dopisz od nowa
+        save();
+      } else if(res.error==='auth'){ toast('Zły klucz Apps Script'); break; }
+      else { console.warn(res); break; }
+    }
+    if(!quiet && done) toast(`Wysłano do arkusza: ${done}`);
+  }catch(e){ if(!quiet) toast('Brak połączenia z arkuszem – spróbuję później'); }
+  finally{ syncing=false; renderAll(); }
+}
+async function pull(){
+  const st=S.settings; if(!st.backend) return toast('Najpierw podaj adres Apps Script');
+  try{
+    await sync(true);
+    const j=await (await fetchT(`${st.backend}?action=list&key=${encodeURIComponent(st.key)}`,{},40000)).json();
+    if(!j.ok) throw new Error(j.error);
+    const pending=S.rides.filter(r=>r.sync && r.sync!=='ok');
+    const pIds=new Set(pending.map(r=>r.id).filter(Boolean)), pRows=new Set(pending.filter(r=>!r.id||r.sync!=='add').map(r=>r.row).filter(Boolean));
+    const old=new Map(S.rides.filter(r=>r.id).map(r=>[r.id,r]));
+    const remote=j.rides.filter(r=>!(r.id && pIds.has(r.id)) && !pRows.has(r.row)).map(r=>{
+      const o=r.id&&old.get(r.id); return {...r, mode: o?.mode || modeOf(r.line), tripId:o?.tripId, vehicleId:o?.vehicleId, sync:'ok'}; });
+    S.rides=[...pending, ...remote]; sortRides(); S.lastPull=Date.now(); save(); renderAll();
+    toast(`Pobrano ${remote.length} przejazdów z arkusza`);
+  }catch(e){ toast('Nie udało się pobrać: '+e.message); }
+}
+function sortRides(){ S.rides.sort((a,b)=> (b.date+b.dep).localeCompare(a.date+a.dep)); }
+const rkey = r => r.id || ('r'+r.row);
+function visibleRides(){ return S.rides.filter(r=>r.sync!=='delete'); }
+
+/* ---------------- widok: przejazd ---------------- */
+let tick=null;
+function renderChips(){
+  const pend=S.rides.filter(r=>r.sync && r.sync!=='ok').length;
+  const rt=G.rt; const rtAge=rt.at? Math.round((Date.now()-rt.at)/1000):null;
+  const rtC = rt.status==='ok' ? `<span class="chip" title="${esc(rt.src)}"><i class="dot ok"></i>RT · ${esc(rt.src)}</span>`
+    : rt.status==='err' ? `<span class="chip" title="${esc(rt.msg)}"><i class="dot err"></i>RT niedostępny</span>` : `<span class="chip"><i class="dot"></i>RT</span>`;
+  const syC = !S.settings.backend ? `<span class="chip"><i class="dot warn"></i>bez arkusza</span>`
+    : syncing ? `<span class="chip"><i class="spin" style="width:9px;height:9px"></i>synchronizacja</span>`
+    : pend ? `<span class="chip"><i class="dot warn"></i>${pend} do wysłania</span>` : `<span class="chip"><i class="dot ok"></i>arkusz</span>`;
+  const stC = G.ok ? '' : `<span class="chip"><i class="dot err"></i>brak GTFS</span>`;
+  $('#chips').innerHTML = rtC + syC + stC;
+}
+function renderRide(){
+  const el=$('#ride-main'); clearInterval(tick);
+  const now=new Date(); $('#today-lbl').textContent=`${PL_DAYS[now.getDay()]}, ${now.getDate()} ${PL_MON[now.getMonth()]}`;
+  if(S.active){
+    const a=S.active; const m=a.mode||modeOf(a.line);
+    el.innerHTML=`
+    <div class="card live ${m}"><div class="stripe"></div>
+      <div class="live-head"><span class="badge lg ${badgeCls(a.line,a.mode)}">${esc(a.line||'?')}</span>
+        <div><div style="font-weight:750;font-size:17px">${a.headsign? '→ '+esc(a.headsign) : (m==='T'?'Tramwaj':'Autobus')}</div>
+        <div class="small faint">w drodze od ${esc(a.dep)}</div></div></div>
+      <div class="timer num" id="timer">0:00</div>
+      <div class="route"><span class="pin"></span><div><b>${esc(a.from||'—')}</b><div class="small faint num">${esc(a.dep)}</div></div>
+        <span class="bar"></span><span></span><span class="pin end"></span><div class="faint">przystanek końcowy ustalę z GPS</div></div>
+      <div class="meta">${a.vehicle?`<span class="chip">🚋 ${esc(a.vehicle)}</span>`:''}${a.brigade?`<span class="chip">brygada ${esc(a.brigade)}</span>`:''}</div>
+    </div>
+    <div class="card" style="padding:4px 16px 16px;margin-top:12px" id="active-notes">${notesHtml(a.notes, m).replace('<label>Uwagi</label>','<label>Zdarzenia w trakcie jazdy</label>')}</div>
+    <button class="go end" id="b-end"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>Zakończ przejazd</button>
+    <div style="display:flex;gap:8px;max-width:340px;margin:0 auto"><button class="go ghost" id="b-edit-active">Popraw dane</button><button class="go ghost" id="b-cancel">Anuluj przejazd</button></div>`;
+    const upd=()=>{ const s=parseTime(a.dep); let d=(Math.floor(Date.now()/1000)-Math.floor(new Date(a.date+'T00:00:00').getTime()/1000))-s; if(d<0) d=0;
+      const t=$('#timer'); if(t) t.textContent=fmtDur(d); };
+    upd(); tick=setInterval(upd,1000);
+    $('#b-end').onclick=endRide; $('#b-cancel').onclick=()=>{ if(confirm('Anulować bieżący przejazd?')){ S.active=null; save(); renderRide(); } };
+    $('#b-edit-active').onclick=()=>openEdit(S.active, true);
+    const an=$('#active-notes'); bindNotes(an, ()=>{ if(!S.active) return; S.active.notes=readNotes(an, m); save(); });
+  } else {
+    const t=visibleRides(); const today=fmtDate(now); const tr=t.filter(r=>r.date===today);
+    const tsum=tr.reduce((s,r)=>s+(durSec(r)||0),0); const last=t[0];
+    el.innerHTML=`
+    <div class="card hero">
+      <div class="clock num" id="clock"></div>
+      <button class="go" id="b-start"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>Rozpocznij przejazd</button>
+      <div class="small faint">czas odjazdu zapisze się w chwili naciśnięcia</div>
+    </div>
+    <div class="today">
+      <div class="card kpi"><b class="num">${tr.length}</b><span>przejazdy dziś</span></div>
+      <div class="card kpi"><b class="num">${fmtDur(tsum,true)}</b><span>w drodze dziś</span></div>
+      <div class="card kpi"><b class="num">${t.length}</b><span>łącznie</span></div>
+    </div>
+    ${last?`<h2>Ostatni przejazd</h2>${rideCard(last)}`:''}`;
+    const c=()=>{ const d=new Date(); const e=$('#clock'); if(e) e.innerHTML=`${pad(d.getHours())}:${pad(d.getMinutes())}<span class="s">:${pad(d.getSeconds())}</span>`; };
+    c(); tick=setInterval(c,1000);
+    $('#b-start').onclick=startRide;
+    bindRideCards(el);
+  }
+  renderChips();
+}
+
+/* ---------- arkusz dolny ---------- */
+function openSheet(html, keep){ const sh=$('#sheet'); const top=sh.scrollTop; const wasOn=sh.classList.contains('on');
+  $('#sheet-body').innerHTML=html; sh.classList.add('on'); $('#backdrop').classList.add('on'); sh.scrollTop = keep&&wasOn ? top : 0; }
+function keepInputs(ctx){ if(SHEET_CTX===ctx && $('#sheet').classList.contains('on')) readDraft(ctx); }
+function closeSheet(){ $('#sheet').classList.remove('on'); $('#backdrop').classList.remove('on'); SHEET_CTX=null; }
+let SHEET_CTX=null;
+$('#backdrop').onclick=()=>{ if(SHEET_CTX?.kind==='start' || SHEET_CTX?.kind==='end'){ if(!confirm('Zamknąć bez zapisywania?')) return; } closeSheet(); };
+
+function stopCandsHtml(groups, sel, extra){
+  const items=[...(extra||[]), ...groups.map(g=>({name:g.name, note:`${Math.round(g.d)} m${g.out?' · poza buforem':''}`}))];
+  if(!items.length) return '';
+  return `<div class="cands">${items.map(c=>`<button type="button" class="cand ${c.name===sel?'sel':''}" data-stop="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc(c.note)}</small></button>`).join('')}</div>`;
+}
+function sugHtml(list, selObj){
+  if(!list.length) return '';
+  return list.slice(0,8).map((s,i)=>{
+    const k=String(i); const right = s.src==='gps' ? `<span class="src gps">${s.d} m</span>` : s.src==='tu' ? `<span class="src tu">${s.eta>=0?'za '+s.eta+' min':(-s.eta)+' min temu'}</span>` : `<span class="src st">${esc(s.sched)}</span>`;
+    const det=[s.vehicle&&('🚋 '+s.vehicle), s.brigade&&('bryg. '+s.brigade), s.src==='st'&&'rozkład', s.atStop&&'na przystanku'].filter(Boolean).join(' · ');
+    return `<button type="button" class="sug ${selObj===s?'sel':''}" data-sug="${k}"><span class="badge ${badgeCls(s.line,s.mode)}">${esc(s.line||'?')}</span>
+      <span><div class="h">${s.headsign?'→ '+esc(s.headsign):esc(s.tripId||'kurs')}</div><div class="d">${esc(det)||'&nbsp;'}</div></span>${right}</button>`; }).join('');
+}
+
+/* ---------- START ---------- */
+async function startRide(){
+  const t=new Date();
+  const ctx = SHEET_CTX = { kind:'start', draft:{ id:uid(), date:fmtDate(t), dep:fmtTime(t), from:'', line:'', brigade:'', vehicle:'', to:'', arr:'', notes:'', mode:'' }, stops:[], sugs:[], sel:null, pos:null };
+  const prev=visibleRides()[0];
+  const prevEndRecent = prev && prev.to && prev.date===ctx.draft.date && (parseTime(ctx.draft.dep)-parseTime(prev.arr))<5400 && (parseTime(ctx.draft.dep)-parseTime(prev.arr))>=0;
+  const draw=()=>{
+    if(SHEET_CTX!==ctx) return; const d=ctx.draft;
+    const extra = prevEndRecent && !ctx.stops.some(g=>g.name===prev.to) ? [{name:prev.to, note:'koniec poprzedniego'}] : [];
+    openSheet(`
+      <h3>Nowy przejazd</h3><div class="small faint">${dayLabel(d.date)}</div>
+      <div class="row2">
+        <div class="field"><label>Godzina odjazdu</label><input class="f num" id="f-dep" inputmode="numeric" value="${esc(d.dep)}"></div>
+        <div class="field"><label>Data</label><input class="f" id="f-date" type="date" value="${esc(d.date)}"></div>
+      </div>
+      <div class="field"><label>Przystanek początkowy</label><input class="f" id="f-from" list="stopnames" value="${esc(d.from)}" placeholder="wybierz lub wpisz">
+        <div class="status" id="st-gps">${ctx.gpsMsg||'<i class="spin"></i> ustalam pozycję…'}</div>
+        ${stopCandsHtml(ctx.stops, d.from, extra)}</div>
+      <div class="field"><label>Linia – podpowiedzi</label>
+        <div class="status">${ctx.rtMsg||'<i class="spin"></i> szukam pojazdów w pobliżu…'}</div>
+        ${sugHtml(ctx.sugs, ctx.selObj)}</div>
+      <div class="row3">
+        <div class="field"><label>Linia</label><input class="f num" id="f-line" value="${esc(d.line)}" autocapitalize="characters"></div>
+        <div class="field"><label>Brygada</label><input class="f num" id="f-brig" value="${esc(d.brigade)}"></div>
+        <div class="field"><label>Nr taborowy</label><input class="f" id="f-veh" value="${esc(d.vehicle)}" autocapitalize="characters"></div>
+      </div>
+      <div class="actions"><button class="btn" id="b-x">Anuluj</button><button class="btn pri" id="b-ok">Jadę ▸</button></div>`, ctx.drawn); ctx.drawn=true;
+    bindStart(ctx);
+  };
+  ctx.redraw=draw; draw();
+  try{
+    const pos = ctx.pos = await locate();
+    if(!G.ok) await loadStatic();
+    keepInputs(ctx);
+    let near=groupStops(nearStops(pos, S.settings.buffer));
+    if(near.length){ ctx.draft.from = ctx.draft.from || near[0].name; ctx.gpsMsg=`±${pos.acc} m · ${near.length} ${near.length===1?'przystanek':'przystanki'} w buforze ${S.settings.buffer} m`; }
+    else { near=groupStops(nearStops(pos, 300)).slice(0,4).map(g=>({...g,out:true})); ctx.gpsMsg=`±${pos.acc} m · brak przystanku w buforze ${S.settings.buffer} m${near.length?' – najbliższe:':''}`;
+      if(prevEndRecent && !ctx.draft.from) ctx.draft.from=prev.to; }
+    ctx.stops=near; draw();
+    const inBuf = near.filter(g=>!g.out); const useStops = inBuf.length? inBuf : near.slice(0,1);
+    await suggestLines(pos, useStops, (list, rtOk)=>{ keepInputs(ctx); ctx.sugs=list;
+      ctx.rtMsg = list.length ? (rtOk? 'dotknij, aby wybrać' : 'GTFS-RT niedostępny – podpowiedzi z rozkładu') : (rtOk? 'nie znaleziono pojazdu w pobliżu – wpisz ręcznie' : 'GTFS-RT niedostępny – wpisz ręcznie');
+      draw(); });
+  }catch(e){ keepInputs(ctx); ctx.gpsMsg='⚠️ '+esc(e.message)+' – wpisz przystanek ręcznie'; ctx.rtMsg = ctx.rtMsg||'wpisz linię ręcznie';
+    if(prevEndRecent && !ctx.draft.from) ctx.draft.from=prev.to; draw(); }
+}
+function readDraft(ctx){
+  const d=ctx.draft, v=id=>{ const e=$('#'+id); return e? e.value.trim() : undefined; };
+  const set=(k,id)=>{ const x=v(id); if(x!==undefined) d[k]=x; };
+  set('dep','f-dep'); set('date','f-date'); set('from','f-from'); set('line','f-line'); set('brigade','f-brig'); set('vehicle','f-veh');
+  set('arr','f-arr'); set('to','f-to');
+  const nt=readNotes($('#sheet-body'), d.mode||modeOf(d.line)); if(nt!==undefined) d.notes=nt;
+  d.dep=normTimeInput(d.dep); if(d.arr) d.arr=normTimeInput(d.arr);
+}
+function bindStart(ctx){
+  const b=$('#sheet-body');
+  b.querySelectorAll('[data-stop]').forEach(x=>x.onclick=()=>{ readDraft(ctx); ctx.draft.from=x.dataset.stop; ctx.redraw(); });
+  b.querySelectorAll('[data-sug]').forEach(x=>x.onclick=()=>{ readDraft(ctx); const s=ctx.sugs[+x.dataset.sug]; ctx.sel=x.dataset.sug; ctx.selObj=s;
+    Object.assign(ctx.draft,{ line:s.line, mode:s.mode, headsign:s.headsign, vehicle:s.vehicle||'', vehicleId:s.vehicleId||'', tripId:s.tripId||'', feed:s.feed,
+      brigade: (S.settings.brigadeTramsOnly && s.mode!=='T') ? '' : (s.brigade||'') });
+    // pojazd stoi na przystanku → jego stop_id wskazuje dokładny słupek
+    if(s.atStop && s.stopKey){ const st=stopById(s.stopKey); if(st) ctx.draft.from=stopLabel(st); }
+    ctx.redraw(); });
+  $('#b-x').onclick=closeSheet;
+  $('#b-ok').onclick=()=>{ readDraft(ctx); const d=ctx.draft;
+    if(parseTime(d.dep)==null) return toast('Podaj godzinę w formacie hh:mm:ss');
+    if(!d.line && !confirm('Nie podano linii. Rozpocząć mimo to?')) return;
+    d.mode = d.mode && ctx.sel!=null ? d.mode : modeOf(d.line);
+    S.active={...d}; save(); closeSheet(); renderRide(); toast('Miłej podróży 🚋'); };
+}
+
+/* ---------- KONIEC ---------- */
+async function endRide(){
+  const t=new Date(); const a=S.active;
+  const ctx = SHEET_CTX = { kind:'end', draft:{...a, arr:fmtTime(t)}, stops:[], extra:[] };
+  const draw=()=>{
+    if(SHEET_CTX!==ctx) return; const d=ctx.draft; const dur=durSec(d);
+    openSheet(`
+      <h3>Koniec przejazdu</h3><div class="small faint"><span class="badge sm ${badgeCls(d.line,d.mode)}">${esc(d.line||'?')}</span> &nbsp;${esc(d.from)} · ${esc(d.dep)}</div>
+      <div class="row2">
+        <div class="field"><label>Godzina przyjazdu</label><input class="f num" id="f-arr" inputmode="numeric" value="${esc(d.arr)}"></div>
+        <div class="field"><label>Czas podróży</label><input class="f num" id="f-dur" value="${fmtDur(dur)}" disabled></div>
+      </div>
+      <div class="field"><label>Przystanek końcowy</label><input class="f" id="f-to" list="stopnames" value="${esc(d.to)}" placeholder="wybierz lub wpisz">
+        <div class="status">${ctx.gpsMsg||'<i class="spin"></i> ustalam pozycję…'}</div>${stopCandsHtml(ctx.stops, d.to, ctx.extra)}</div>
+      <div class="row3">
+        <div class="field"><label>Linia</label><input class="f num" id="f-line" value="${esc(d.line)}"></div>
+        <div class="field"><label>Brygada</label><input class="f num" id="f-brig" value="${esc(d.brigade)}"></div>
+        <div class="field"><label>Nr taborowy</label><input class="f" id="f-veh" value="${esc(d.vehicle)}"></div>
+      </div>
+      ${notesHtml(d.notes, d.mode||modeOf(d.line))}
+      <div class="actions"><button class="btn" id="b-x">Wróć</button><button class="btn pri" id="b-ok">Zapisz przejazd</button></div>`, ctx.drawn); ctx.drawn=true;
+    const b=$('#sheet-body');
+    b.querySelectorAll('[data-stop]').forEach(x=>x.onclick=()=>{ readDraft(ctx); ctx.draft.to=x.dataset.stop; draw(); });
+    $('#f-arr').oninput=()=>{ const x=normTimeInput($('#f-arr').value); $('#f-dur').value=fmtDur(durSec({dep:d.dep, arr:x})); };
+    bindNotes(b);
+    $('#b-x').onclick=closeSheet;
+    $('#b-ok').onclick=()=>{ readDraft(ctx); const d=ctx.draft; if(parseTime(d.arr)==null) return toast('Podaj godzinę przyjazdu hh:mm:ss');
+      if(durSec(d)>4*3600 && !confirm(`Czas podróży wychodzi ${fmtDur(durSec(d))} – na pewno zapisać?`)) return;
+      const r={...d, sync:'add'}; delete r.headsign; delete r.feed;
+      S.rides.unshift(r); sortRides(); S.active=null; save(); closeSheet(); renderAll(); toast('Zapisano przejazd'); sync(); };
+  };
+  draw();
+  // pozycja pojazdu (jego bieżący przystanek) – niezależnie od GPS telefonu
+  const vehP = (async()=>{ if(!a.vehicleId || !a.feed) return;
+    try{ const bufs=await getFeeds(['VehiclePositions_'+a.feed], 5000); const v=decodeVP(bufs['VehiclePositions_'+a.feed],a.feed).find(x=>x.veh.id===a.vehicleId);
+      const s=v && v.stopId && stopById(a.feed+':'+v.stopId); if(s) ctx.vehStop=stopLabel(s); }catch(e){} })();
+  try{
+    const pos=await locate(); keepInputs(ctx);
+    let near=groupStops(nearStops(pos, S.settings.buffer)); let msg;
+    if(near.length){ msg=`±${pos.acc} m · w buforze ${S.settings.buffer} m`; ctx.draft.to=ctx.draft.to||near[0].name; }
+    else { near=groupStops(nearStops(pos,300)).slice(0,4).map(g=>({...g,out:true})); msg=`±${pos.acc} m · brak przystanku w buforze ${S.settings.buffer} m`; }
+    ctx.stops=near; ctx.gpsMsg=msg; draw();
+  }catch(e){ keepInputs(ctx); ctx.gpsMsg='⚠️ '+esc(e.message); draw(); }
+  await vehP; keepInputs(ctx);
+  if(ctx.vehStop && !ctx.stops.some(g=>g.name===ctx.vehStop)){ ctx.extra=[{name:ctx.vehStop, note:'wg pozycji pojazdu'}]; if(!ctx.draft.to) ctx.draft.to=ctx.vehStop; draw(); }
+}
+
+/* ---------- EDYCJA ---------- */
+function openEdit(r, isActive){
+  const ctx = SHEET_CTX = { kind:'edit', draft:{...r} };
+  const d=ctx.draft;
+  openSheet(`
+    <h3>${isActive?'Bieżący przejazd':(r.date?'Edycja przejazdu':'Nowy przejazd')}</h3>
+    ${r.row?`<div class="small faint">wiersz ${r.row} w arkuszu</div>`:''}
+    <div class="row2">
+      <div class="field"><label>Data</label><input class="f" id="f-date" type="date" value="${esc(d.date)}"></div>
+      <div class="field"><label>Linia</label><input class="f num" id="f-line" value="${esc(d.line)}"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Godzina odjazdu</label><input class="f num" id="f-dep" inputmode="numeric" value="${esc(d.dep)}" placeholder="hh:mm:ss"></div>
+      ${isActive?'':`<div class="field"><label>Godzina przyjazdu</label><input class="f num" id="f-arr" inputmode="numeric" value="${esc(d.arr)}" placeholder="hh:mm:ss"></div>`}
+    </div>
+    ${isActive?'':`<div class="field"><label>Czas podróży (wyliczany)</label><input class="f num" id="f-dur" value="${fmtDur(durSec(d))}" disabled></div>`}
+    <div class="field"><label>Przystanek początkowy</label><input class="f" id="f-from" list="stopnames" value="${esc(d.from)}"></div>
+    ${isActive?'':`<div class="field"><label>Przystanek końcowy</label><input class="f" id="f-to" list="stopnames" value="${esc(d.to)}"></div>`}
+    <div class="row2">
+      <div class="field"><label>Brygada</label><input class="f num" id="f-brig" value="${esc(d.brigade)}"></div>
+      <div class="field"><label>Numer taborowy</label><input class="f" id="f-veh" value="${esc(d.vehicle)}" autocapitalize="characters"></div>
+    </div>
+    ${notesHtml(d.notes, d.mode||modeOf(d.line))}
+    <div class="actions">${(!isActive && r.date && S.rides.includes(r))?'<button class="btn danger" id="b-del">Usuń</button>':''}<button class="btn" id="b-x">Anuluj</button><button class="btn pri" id="b-ok">Zapisz</button></div>`);
+  $('#b-x').onclick=closeSheet;
+  bindNotes($('#sheet-body'));
+  const updDur=()=>{ const e=$('#f-dur'); if(e) e.value=fmtDur(durSec({dep:normTimeInput($('#f-dep').value), arr:normTimeInput($('#f-arr')?.value)})); };
+  $('#f-dep').oninput=updDur; if($('#f-arr')) $('#f-arr').oninput=updDur;
+  const del=$('#b-del'); if(del) del.onclick=()=>{ if(!confirm('Usunąć ten przejazd (także z arkusza)?')) return;
+    if(r.sync==='add'){ S.rides=S.rides.filter(x=>x!==r); } else { if(!r.id) r.orig=r.orig||{date:r.date,dep:r.dep}; r.sync='delete'; }
+    save(); closeSheet(); renderAll(); sync(true); };
+  $('#b-ok').onclick=()=>{ readDraft(ctx); const n=ctx.draft;
+    if(!n.date) return toast('Podaj datę'); if(parseTime(n.dep)==null) return toast('Godzina odjazdu: hh:mm:ss');
+    if(!isActive && n.arr && parseTime(n.arr)==null) return toast('Godzina przyjazdu: hh:mm:ss');
+    if(n.line!==r.line) n.mode=modeOf(n.line);
+    if(isActive){ S.active=n; save(); closeSheet(); renderRide(); return; }
+    if(!S.rides.includes(r)){ n.id=n.id||uid(); n.sync='add'; S.rides.unshift(n); }
+    else { const i=S.rides.indexOf(r);
+      if(r.sync==='ok'){ if(!r.id){ n.orig={date:r.date, dep:r.dep}; n.id=uid(); } n.sync='update'; }
+      S.rides[i]=n; }
+    sortRides(); save(); closeSheet(); renderAll(); toast('Zapisano'); sync(true); };
+}
+
+/* ---------------- widok: historia ---------------- */
+let histLimit=120;
+function rideCard(r){
+  const d=durSec(r);
+  const sub=[r.dep&&r.dep, r.vehicle&&('🚋 '+r.vehicle), r.brigade&&('bryg. '+r.brigade), r.notes&&('📝 '+r.notes)].filter(Boolean).join(' · ');
+  return `<div class="card ride" data-k="${esc(rkey(r))}"><span class="badge ${badgeCls(r.line,r.mode)}">${esc(r.line||'?')}</span>
+    <div style="min-width:0"><div class="stops">${esc(r.from||'—')}<i>→</i>${esc(r.to||'—')}</div><div class="sub num">${esc(sub)}${r.sync&&r.sync!=='ok'?'<span class="pend" title="czeka na wysłanie"></span>':''}</div></div>
+    <div class="dur num">${fmtDur(d)}<small>${esc(r.arr? r.arr.slice(0,5):'')}</small></div></div>`;
+}
+function bindRideCards(root){ root.querySelectorAll('[data-k]').forEach(x=>x.onclick=()=>{ const r=S.rides.find(y=>rkey(y)===x.dataset.k); if(r) openEdit(r); }); }
+function renderHist(){
+  const q=$('#q').value.trim().toLowerCase(); let list=visibleRides();
+  if(q) list=list.filter(r=>[r.date,r.line,r.from,r.to,r.vehicle,r.brigade,r.notes].join(' ').toLowerCase().includes(q));
+  $('#hist-count').textContent=`${list.length} przejazdów`;
+  if(!list.length){ $('#hist-list').innerHTML=`<div class="empty">${q?'Brak wyników':'Nie ma jeszcze przejazdów.<br>Pobierz historię z arkusza w Ustawieniach.'}</div>`; return; }
+  let html='', cur=null, i=0;
+  for(const r of list.slice(0,histLimit)){
+    if(r.date!==cur){ cur=r.date; const dayR=list.filter(x=>x.date===cur); const s=dayR.reduce((a,x)=>a+(durSec(x)||0),0);
+      html+=`<div class="day"><span>${esc(dayLabel(cur))}</span><span class="num">${dayR.length} · ${fmtDur(s,true)}</span></div>`; }
+    html+=rideCard(r); i++;
+  }
+  if(list.length>histLimit) html+=`<button class="btn more" id="b-more">Pokaż więcej (${list.length-histLimit})</button>`;
+  $('#hist-list').innerHTML=html; bindRideCards($('#hist-list'));
+  const m=$('#b-more'); if(m) m.onclick=()=>{ histLimit+=300; renderHist(); };
+}
+$('#q').oninput=()=>{ histLimit=120; renderHist(); };
+$('#btn-add').onclick=()=>{ const t=new Date(); openEdit({ date:fmtDate(t), dep:'', arr:'', from:'', to:'', line:'', brigade:'', vehicle:'', notes:'' }); };
+
+/* ---------------- widok: statystyki ---------------- */
+function renderStats(){
+  const all=visibleRides(); const years=[...new Set(all.map(r=>r.date.slice(0,4)))].sort().reverse();
+  const ranges=[['all','Wszystko'],['30','30 dni'],['365','12 mies.'],...years.map(y=>['y'+y,y])];
+  if(!ranges.some(r=>r[0]===S.statsRange)) S.statsRange='all';
+  $('#stats-seg').innerHTML=ranges.map(([k,l])=>`<button data-r="${k}" class="${k===S.statsRange?'on':''}">${l}</button>`).join('');
+  $('#stats-seg').querySelectorAll('button').forEach(b=>b.onclick=()=>{ S.statsRange=b.dataset.r; renderStats(); });
+  const R=S.statsRange; const now=new Date();
+  const list=all.filter(r=>{ if(R==='all') return true; if(R[0]==='y') return r.date.startsWith(R.slice(1));
+    const d=new Date(r.date+'T12:00:00'); return (now-d)/864e5 <= +R; });
+  $('#stats-sub').textContent = list.length? `${list.length} przejazdów` : '';
+  const body=$('#stats-body'); if(!list.length){ body.innerHTML='<div class="empty">Brak przejazdów w tym okresie</div>'; return; }
+  const durs=list.map(durSec).filter(x=>x!=null && x<6*3600); const tot=durs.reduce((a,b)=>a+b,0);
+  const tram=list.filter(r=>(r.mode||modeOf(r.line))==='T').length; const bus=list.length-tram;
+  const days=new Set(list.map(r=>r.date)).size;
+  const cnt=(f)=>{ const m=new Map(); for(const r of list){ const k=f(r); if(!k) continue; m.set(k,(m.get(k)||0)+1); } return [...m.entries()].sort((a,b)=>b[1]-a[1]); };
+  const lines=cnt(r=>String(r.line||'').trim()); const vehs=cnt(r=>String(r.vehicle||'').trim().toUpperCase());
+  const stops=(()=>{ const m=new Map(); for(const r of list) for(const s0 of [r.from,r.to]) if(s0){ const s=S.settings.postMerge? baseStopName(s0) : s0; m.set(s,(m.get(s)||0)+1); } return [...m.entries()].sort((a,b)=>b[1]-a[1]); })();
+  const rel=cnt(r=>r.from&&r.to? r.from+' → '+r.to : '');
+  const longest=list.filter(r=>durSec(r)!=null&&durSec(r)<6*3600).sort((a,b)=>durSec(b)-durSec(a))[0];
+  const bars=(arr,n,fmtL,modeF,wide)=>{ const top=arr.slice(0,n); const mx=top[0]?.[1]||1;
+    return `<div class="card bars${wide?' wide':''}">${top.map(([k,v])=>`<div class="brow"><span class="lbl">${fmtL?fmtL(k):esc(k)}</span><span class="trk"><i class="${modeF?modeF(k):''}" style="width:${(v/mx*100).toFixed(1)}%"></i></span><span class="v num">${v}</span></div>`).join('')}</div>`; };
+  // miesiące (ostatnie 24 w zakresie)
+  const months=new Map(); for(const r of list){ const k=r.date.slice(0,7); months.set(k,(months.get(k)||0)+1); }
+  let mk=[...months.keys()].sort(); if(mk.length){ const out=[]; let [y,m]=mk[0].split('-').map(Number); const [ey,em]=mk[mk.length-1].split('-').map(Number);
+    while(y<ey||(y===ey&&m<=em)){ out.push(`${y}-${pad(m)}`); m++; if(m>12){m=1;y++;} } mk=out.slice(-24); }
+  const mmx=Math.max(1,...mk.map(k=>months.get(k)||0));
+  const hours=Array(24).fill(0); for(const r of list){ const s=parseTime(r.dep); if(s!=null) hours[Math.floor(s/3600)%24]++; } const hmx=Math.max(1,...hours);
+  const wd=Array(7).fill(0); for(const r of list){ const d=new Date(r.date+'T12:00:00'); if(!isNaN(d)) wd[(d.getDay()+6)%7]++; } const wmx=Math.max(1,...wd);
+  const lineBadge=k=>`<span class="badge sm ${badgeCls(k)}">${esc(k)}</span>`;
+  body.innerHTML=`
+    <div class="kgrid">
+      <div class="card kpi"><b class="num">${list.length}</b><span>przejazdów · ${days} dni</span></div>
+      <div class="card kpi"><b class="num">${fmtDur(tot,true)}</b><span>łącznie w drodze</span></div>
+      <div class="card kpi"><b class="num">${durs.length?fmtDur(Math.round(tot/durs.length)):'–'}</b><span>średni czas przejazdu</span></div>
+      <div class="card kpi"><b class="num">${(list.length/days).toFixed(1)}</b><span>przejazdów na dzień z podróżą</span></div>
+      <div class="card kpi"><b class="num">${lines.length}</b><span>różnych linii</span></div>
+      <div class="card kpi"><b class="num">${vehs.length}</b><span>różnych pojazdów</span></div>
+    </div>
+    <div class="card kpi" style="margin-top:10px"><div style="display:flex;justify-content:space-between;font-size:13px;font-weight:650">
+      <span style="color:var(--tram)">Tramwaj ${tram} · ${Math.round(tram/list.length*100)}%</span><span style="color:var(--bus)">Autobus ${bus} · ${Math.round(bus/list.length*100)}%</span></div>
+      <div class="split"><i style="width:${tram/list.length*100}%;background:var(--tram)"></i><i style="width:${bus/list.length*100}%;background:var(--bus)"></i></div></div>
+    ${longest?`<h2>Najdłuższy przejazd</h2>${rideCard(longest)}`:''}
+    <h2>Przejazdy w miesiącach</h2>
+    <div class="card"><div class="cols">${mk.map(k=>`<div class="c" title="${k}: ${months.get(k)||0}"><i style="height:${((months.get(k)||0)/mmx*100).toFixed(1)}%"></i></div>`).join('')}</div>
+      <div class="cols-x">${mk.map((k,i)=>`<span>${(mk.length<=12||i%3===0)?PL_MON_S[+k.slice(5)-1]+(k.endsWith('-01')||i===0?" '"+k.slice(2,4):''):''}</span>`).join('')}</div></div>
+    <h2>Najczęstsze linie</h2>${bars(lines,12,lineBadge,k=>modeOf(k))}
+    <h2>Pora odjazdu</h2>
+    <div class="card"><div class="cols" style="height:110px">${hours.map((v,h)=>`<div class="c" title="${h}:00 – ${v}"><i style="height:${(v/hmx*100).toFixed(1)}%"></i></div>`).join('')}</div>
+      <div class="cols-x">${hours.map((v,h)=>`<span>${h%3===0?h:''}</span>`).join('')}</div></div>
+    <h2>Dzień tygodnia</h2>${bars(['pon','wt','śr','czw','pt','sob','nd'].map((d,i)=>[d,wd[i]]),7)}
+    <h2>Najczęstsze pojazdy</h2>${bars(vehs,10)}
+    <h2>Najczęstsze przystanki</h2>${bars(stops,10,null,null,true)}
+    <h2>Najczęstsze relacje</h2>${bars(rel,8,null,null,true)}
+    <div style="height:20px"></div>`;
+  bindRideCards(body);
+}
+
+/* ---------------- widok: ustawienia ---------------- */
+function renderSet(){
+  const s=S.settings; const v=(id,x)=>$('#'+id).value=x??'';
+  v('s-backend',s.backend); v('s-key',s.key); v('s-buffer',s.buffer); v('s-vrad',s.vehRadius); v('s-rtmode',s.rtMode); v('s-vfield',s.vehField);
+  v('s-brule',s.brigadeRule); v('s-bregex',s.brigadeRegex); v('s-data',s.dataUrl); v('s-theme',s.theme);
+  v('s-post',s.postMode); v('s-postre',s.postRegex); $('#s-postmerge').checked=!!s.postMerge;
+  $('#s-postre').style.display = s.postMode==='idre' ? '' : 'none';
+  $('#s-btram').checked=!!s.brigadeTramsOnly; ['A','T','M'].forEach(f=>$('#s-f'+f).checked=s.feeds.includes(f));
+  $('#s-bregex').style.display = s.brigadeRule==='regex' ? '' : 'none';
+  const pend=S.rides.filter(r=>r.sync&&r.sync!=='ok').length;
+  $('#s-sync-info').textContent = `${pend} przejazdów czeka na wysłanie. ${S.lastPull?'Ostatnie pobranie z arkusza: '+new Date(S.lastPull).toLocaleString('pl-PL'):'Nie pobierano jeszcze historii z arkusza.'}`;
+  $('#s-static-info').textContent = G.ok ? `Rozkład statyczny: ${G.stops.length} przystanków, wygenerowany ${G.generated? new Date(G.generated).toLocaleString('pl-PL'):'?'}` : 'Nie wczytano danych statycznego GTFS (stops.json).';
+  $('#ver').textContent=`Przejazdy ${VERSION}`;
+}
+function bindSet(){
+  const s=S.settings; const on=(id,fn)=>$('#'+id).addEventListener('change',()=>{ fn($('#'+id)); save(); renderSet(); renderChips(); });
+  on('s-backend',e=>s.backend=e.value.trim()); on('s-key',e=>s.key=e.value.trim());
+  on('s-buffer',e=>s.buffer=Math.max(5,+e.value||20)); on('s-vrad',e=>s.vehRadius=Math.max(10,+e.value||60));
+  on('s-rtmode',e=>{ s.rtMode=e.value; G.directOk=null; }); on('s-vfield',e=>s.vehField=e.value);
+  on('s-brule',e=>s.brigadeRule=e.value); on('s-bregex',e=>s.brigadeRegex=e.value.trim());
+  on('s-btram',e=>s.brigadeTramsOnly=e.checked);
+  on('s-post',e=>{ s.postMode=e.value; loadStatic(); }); on('s-postre',e=>{ s.postRegex=e.value.trim(); loadStatic(); });
+  on('s-postmerge',e=>s.postMerge=e.checked);
+  on('s-data',e=>{ s.dataUrl=e.value.trim()||'./data/'; G.trips=null; G.tripsP=null; G.dep={}; loadStatic(); });
+  on('s-theme',e=>{ s.theme=e.value; applyTheme(); });
+  ['A','T','M'].forEach(f=>on('s-f'+f,()=>{ s.feeds=['A','T','M'].filter(x=>$('#s-f'+x).checked); if(!s.feeds.length) s.feeds=['A','T']; }));
+  $('#b-test').onclick=async()=>{ if(!s.backend) return toast('Podaj adres Apps Script');
+    try{ const j=await (await fetchT(`${s.backend}?action=ping&key=${encodeURIComponent(s.key)}`,{},15000)).json(); toast(j.ok?`Połączono z arkuszem „${j.sheet}”`:'Błąd: '+j.error); }
+    catch(e){ toast('Brak połączenia: '+e.message); } };
+  $('#b-pull').onclick=pull; $('#b-sync').onclick=()=>sync(false);
+  $('#b-csv').onclick=exportCsv;
+  $('#b-wipe').onclick=()=>{ const p=S.rides.filter(r=>r.sync&&r.sync!=='ok').length;
+    if(!confirm(p?`Uwaga: ${p} przejazdów nie trafiło jeszcze do arkusza i przepadną. Wyczyścić?`:'Wyczyścić lokalną kopię przejazdów? (arkusz pozostanie bez zmian)')) return;
+    S.rides=[]; S.active=null; S.lastPull=0; save(); renderAll(); };
+  $('#b-diag').onclick=diag;
+}
+function applyTheme(){ const t=S.settings.theme; if(t) document.documentElement.dataset.theme=t; else delete document.documentElement.dataset.theme; }
+function exportCsv(){
+  const head=['DATA','GODZINA ODJAZDU','PRZYSTANEK POCZĄTKOWY','LINIA','BRYGADA (TRAMWAJE)','NUMER TABOROWY','PRZYSTANEK KOŃCOWY','GODZINA PRZYJAZDU','CZAS PODRÓŻY','UWAGI'];
+  const q=x=>{ const s=String(x??''); return /[;"\n]/.test(s)? '"'+s.replace(/"/g,'""')+'"' : s; };
+  const rows=[...visibleRides()].reverse().map(r=>[r.date,r.dep,r.from,r.line,r.brigade,r.vehicle,r.to,r.arr,fmtDur(durSec(r)),r.notes].map(q).join(';'));
+  const blob=new Blob(['﻿'+[head.join(';'),...rows].join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`przejazdy-${fmtDate(new Date())}.csv`; document.body.appendChild(a); a.click(); a.remove();
+}
+async function diag(){
+  const el=$('#diag'); el.innerHTML='<div class="status"><i class="spin"></i> pobieram GTFS-RT i pozycję…</div>';
+  const lines=[];
+  try{
+    const posP=locate().catch(e=>null);
+    const bufs=await getFeeds(S.settings.feeds.map(f=>'VehiclePositions_'+f), 0); await ensureTrips(); const pos=await posP;
+    lines.push(`źródło: ${G.rt.src} · ${new Date().toLocaleTimeString('pl-PL')}`); lines.push(pos?`pozycja: ${pos.lat.toFixed(6)}, ${pos.lon.toFixed(6)} ±${pos.acc} m`:'pozycja: brak');
+    lines.push(`trips.json: ${G.trips? Object.keys(G.trips.trips).length+' kursów':'brak'}`);
+    if(pos){ lines.push('\nNajbliższe słupki:'); for(const st of nearStops(pos,250).slice(0,6))
+      lines.push(`  ${Math.round(st.d)} m  ${st.name} | stop_code=${st.code||'–'} | stop_id=${st.id} → zapis: „${stopLabel(st)}”`); }
+    let all=[]; for(const f of S.settings.feeds){ const b=bufs['VehiclePositions_'+f]; if(!b){ lines.push(`${f}: brak danych`); continue; } const v=decodeVP(b,f); lines.push(`${f}: ${v.length} pojazdów, ${(b.byteLength/1024).toFixed(0)} kB`); all.push(...v); }
+    if(pos) all.forEach(v=>v.d=dist(pos,v)); all.sort((a,b)=>(a.d||0)-(b.d||0));
+    for(const v of all.slice(0,8)){ const s=sugFromTrip(v);
+      lines.push(`\n— ${v.d!=null?Math.round(v.d)+' m':''} [${v.feed}]  linia ${s.line||'?'} → ${s.headsign}\n  vehicle.id=${v.veh.id} label=${v.veh.label} license_plate=${v.veh.plate}\n  trip_id=${v.tripId} route_id=${v.routeId}\n  blok=${s.block||'?'}  → brygada=${s.brigade||'?'}  nr tab.=${s.vehicle}\n  stop_id=${v.stopId} status=${v.status}`); }
+  }catch(e){ lines.push('BŁĄD: '+e.message); }
+  el.innerHTML=`<div class="diag">${esc(lines.join('\n'))}</div>`;
+}
+
+/* ---------------- nawigacja ---------------- */
+let curView='ride';
+function show(v){ curView=v; document.querySelectorAll('.view').forEach(x=>x.classList.toggle('on',x.id==='v-'+v)); document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.v===v));
+  window.scrollTo(0,0); renderCur(); }
+function renderCur(){ if(curView==='ride') renderRide(); else if(curView==='hist') renderHist(); else if(curView==='stats') renderStats(); else renderSet(); }
+function renderAll(){ renderCur(); renderChips(); }
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>show(t.dataset.v));
+
+/* ---------------- start ---------------- */
+load(); applyTheme(); bindSet(); renderAll(); loadStatic();
+if(S.settings.backend){ sync(true); if(Date.now()-S.lastPull>6*3600e3 && !S.rides.length) pull(); }
+window.addEventListener('online',()=>sync(true));
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ renderCur(); sync(true); } });
+if('serviceWorker' in navigator && location.protocol==='https:') navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
