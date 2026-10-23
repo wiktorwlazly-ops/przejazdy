@@ -132,6 +132,8 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
 .tag{border:1px solid var(--line);background:var(--card);border-radius:99px;padding:8px 14px;font-size:14px;font-weight:600;cursor:pointer;color:var(--ink2)}
 .tag.sel{background:var(--accent);color:var(--accent-ink);border-color:transparent}
 .tag .ic{margin-right:5px}
+.dev{font-weight:700} .dev.late{color:var(--err)} .dev.early{color:var(--warn)} .dev.ontime{color:var(--ok)}
+.schedline{font-size:12.5px;color:var(--ink3);margin:6px 2px 0}
 .cand.sel{border-color:var(--tram);box-shadow:0 0 0 3px var(--tram-soft)}
 .sug{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;width:100%;padding:12px;border-radius:14px;
   border:1px solid var(--line);background:var(--card);margin-top:8px;cursor:pointer;text-align:left}
@@ -424,6 +426,63 @@ function groupStops(list){
 }
 const stopById = id => G.stops.find(s=>s.id===id);
 
+/* ---------------- rozkład kursu: odchylenia od rozkładu ---------------- */
+const SCHED={}, SCHEDP={};
+function loadSched(rk){
+  if(rk in SCHED) return Promise.resolve(SCHED[rk]);
+  if(!SCHEDP[rk]) SCHEDP[rk]=fetchT(S.settings.dataUrl.replace(/\/?$/,'/')+'sched/'+rk.replace(/:/g,'_').replace(/[^A-Za-z0-9_-]/g,'_')+'.json',{},15000)
+    .then(r=>r.ok?r.json():null).catch(()=>null).then(j=>{ SCHED[rk]=j; delete SCHEDP[rk]; return j; });
+  return SCHEDP[rk];
+}
+function stopIdsFor(label){
+  const l=String(label||'').trim(); if(!l) return new Set();
+  let ids=G.stops.filter(s=>stopLabel(s)===l).map(s=>s.id);
+  if(!ids.length){ const b=baseStopName(l); ids=G.stops.filter(s=>s.name===l||s.name===b).map(s=>s.id); }
+  return new Set(ids);
+}
+function routeKeysFor(line, prefer){
+  const ks=Object.keys(G.routes).filter(k=>String(G.routes[k][0])===String(line||'').trim());
+  return prefer && ks.includes(prefer) ? [prefer, ...ks.filter(k=>k!==prefer)] : ks;
+}
+const secToHms = x => { x=((Math.round(x)%86400)+86400)%86400; return pad(Math.floor(x/3600))+':'+pad(Math.floor(x%3600/60))+':'+pad(x%60); };
+function devSec(actual, sched){ const a=parseTime(actual), b=parseTime(sched); if(a==null||b==null) return null; let d=a-b; d=((d%86400)+86400)%86400; if(d>=43200) d-=86400; return d; }
+function fmtDev(d){ if(d==null) return '–'; const s=d<0?'−':'+'; const x=Math.abs(d); return `${s}${Math.floor(x/60)}:${pad(x%60)}`; }
+function devCls(d){ return d==null?'':(d<-60?'early':d>180?'late':'ontime'); }
+/** Dopasowuje przejazd do kursu z rozkładu: po trip_id z GTFS-RT albo po linii + przystanku + najbliższej godzinie. */
+async function schedForStart(r){
+  if(!r.date || parseTime(r.dep)==null) return null;
+  const ids=stopIdsFor(r.from); if(!ids.size) return null;
+  const D=r.date.replace(/-/g,''), P=fmtDate(new Date(new Date(r.date+'T12:00:00')-864e5)).replace(/-/g,'');
+  const act=parseTime(r.dep); let best=null, exact=null;
+  const pref = r.routeKey || (r.feed && r.routeId ? r.feed+':'+r.routeId : null);
+  for(const rk of routeKeysFor(r.line, pref)){
+    const sh=await loadSched(rk); if(!sh) continue;
+    const aD=new Set(sh.act[D]||[]), aP=new Set(sh.act[P]||[]);
+    for(const tid in sh.trips){ const tr=sh.trips[tid];
+      tr[2].forEach(([si,,dsec],i)=>{ if(!ids.has(sh.stops[si])) return;
+        const cands=[]; if(aD.has(tr[0])) cands.push(0); if(aP.has(tr[0]) && dsec>=86400) cands.push(86400);
+        for(const shift of cands){ const c=dsec-shift; const diff=act-c; const o={rk, tid, i, shift, sched:secToHms(c), diff, head:tr[1]};
+          if(r.tripId && tid===r.tripId){ if(!exact||Math.abs(diff)<Math.abs(exact.diff)) exact=o; }
+          else if(diff>=-180 && diff<=1500 && (!best||Math.abs(diff)<Math.abs(best.diff))) best=o; } });
+    }
+    if(exact) break;
+  }
+  return exact || best;
+}
+async function schedForEnd(r){
+  const m=r.schedInfo; if(!m) return null; const sh=await loadSched(m.rk); const tr=sh?.trips[m.tid]; if(!tr) return null;
+  const ids=stopIdsFor(r.to); if(!ids.size) return null;
+  for(let j=m.i+1;j<tr[2].length;j++){ const [si,asec]=tr[2][j]; if(ids.has(sh.stops[si])) return secToHms(asec-m.shift); }
+  return null;
+}
+async function fillSched(r, which){   // which: 'dep' | 'arr' | 'both'
+  try{
+    if(which!=='arr' || !r.schedInfo){ const m=await schedForStart(r); r.schedInfo=m? {rk:m.rk,tid:m.tid,i:m.i,shift:m.shift} : null; if(which!=='arr') r.schedDep=m? m.sched : ''; }
+    if(which!=='dep'){ r.schedArr = (await schedForEnd(r)) || ''; }
+  }catch(e){ console.warn('rozkład', e); }
+  return r;
+}
+
 /* ---------------- GTFS-RT: dekoder protobuf ---------------- */
 const TD = new TextDecoder();
 function pbParse(u8){
@@ -570,7 +629,7 @@ function locate(maxMs=8000, good=10){
 /* ---------------- arkusz: synchronizacja ---------------- */
 let syncing=false;
 function payload(r){ return { id:r.id, row:r.row||null, orig:r.orig||null, keepDateEmpty:!!r.keepDateEmpty, date:r.date, dep:r.dep, from:r.from, line:r.line,
-  brigade:r.brigade, vehicle:r.vehicle, to:r.to, arr:r.arr, notes:r.notes }; }
+  brigade:r.brigade, vehicle:r.vehicle, to:r.to, arr:r.arr, notes:r.notes, schedDep:r.schedDep||'', schedArr:r.schedArr||'' }; }
 async function post(body){
   const r=await fetchT(S.settings.backend,{method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({key:S.settings.key, ...body})},20000);
   return r.json();
@@ -644,7 +703,7 @@ function renderRide(){
       <div class="timer num" id="timer">0:00</div>
       <div class="route"><span class="pin"></span><div><b>${esc(a.from||'—')}</b><div class="small faint num">${esc(a.dep)}</div></div>
         <span class="bar"></span><span></span><span class="pin end"></span><div class="faint">przystanek końcowy ustalę z GPS</div></div>
-      <div class="meta">${a.vehicle?`<span class="chip">${vIcon(a.line,a.mode)} ${esc(a.vehicle)}</span>`:''}${a.brigade?`<span class="chip">brygada ${esc(a.brigade)}</span>`:''}</div>
+      <div class="meta">${a.vehicle?`<span class="chip">${vIcon(a.line,a.mode)} ${esc(a.vehicle)}</span>`:''}${a.brigade?`<span class="chip">brygada ${esc(a.brigade)}</span>`:''}${a.schedDep?`<span class="chip">rozkład ${esc(a.schedDep.slice(0,5))} · <b class="dev ${devCls(devSec(a.dep,a.schedDep))}">${fmtDev(devSec(a.dep,a.schedDep))}</b></span>`:''}</div>
     </div>
     <div class="card" style="padding:4px 16px 16px;margin-top:12px" id="active-notes">${notesHtml(a.notes, m).replace('<label>Uwagi</label>','<label>Zdarzenia w trakcie jazdy</label>')}</div>
     <button class="go end" id="b-end"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>Zakończ przejazd</button>
@@ -750,7 +809,8 @@ function readDraft(ctx){
   const d=ctx.draft, v=id=>{ const e=$('#'+id); return e? e.value.trim() : undefined; };
   const set=(k,id)=>{ const x=v(id); if(x!==undefined) d[k]=x; };
   set('dep','f-dep'); set('date','f-date'); set('from','f-from'); set('line','f-line'); set('brigade','f-brig'); set('vehicle','f-veh');
-  set('arr','f-arr'); set('to','f-to');
+  set('arr','f-arr'); set('to','f-to'); set('schedDep','f-sdep'); set('schedArr','f-sarr');
+  if(d.schedDep) d.schedDep=normTimeInput(d.schedDep); if(d.schedArr) d.schedArr=normTimeInput(d.schedArr);
   const nt=readNotes($('#sheet-body'), d.mode||modeOf(d.line)); if(nt!==undefined) d.notes=nt;
   d.dep=normTimeInput(d.dep); if(d.arr) d.arr=normTimeInput(d.arr);
 }
@@ -758,7 +818,7 @@ function bindStart(ctx){
   const b=$('#sheet-body');
   b.querySelectorAll('[data-stop]').forEach(x=>x.onclick=()=>{ readDraft(ctx); ctx.draft.from=x.dataset.stop; ctx.redraw(); });
   b.querySelectorAll('[data-sug]').forEach(x=>x.onclick=()=>{ readDraft(ctx); const s=ctx.sugs[+x.dataset.sug]; ctx.sel=x.dataset.sug; ctx.selObj=s;
-    Object.assign(ctx.draft,{ line:s.line, mode:s.mode, headsign:s.headsign, vehicle:s.vehicle||'', vehicleId:s.vehicleId||'', tripId:s.tripId||'', feed:s.feed,
+    Object.assign(ctx.draft,{ routeKey:(s.feed&&s.routeId? s.feed+':'+s.routeId : (tripInfo(s.feed,s.tripId)?.routeKey||'')), line:s.line, mode:s.mode, headsign:s.headsign, vehicle:s.vehicle||'', vehicleId:s.vehicleId||'', tripId:s.tripId||'', feed:s.feed,
       brigade: (S.settings.brigadeTramsOnly && s.mode!=='T') ? '' : (s.brigade||'') });
     // pojazd stoi na przystanku → jego stop_id wskazuje dokładny słupek
     if(s.atStop && s.stopKey){ const st=stopById(s.stopKey); if(st) ctx.draft.from=stopLabel(st); }
@@ -768,7 +828,8 @@ function bindStart(ctx){
     if(parseTime(d.dep)==null) return toast('Podaj godzinę w formacie hh:mm:ss');
     if(!d.line && !confirm('Nie podano linii. Rozpocząć mimo to?')) return;
     d.mode = d.mode && ctx.sel!=null ? d.mode : modeOf(d.line);
-    S.active={...d}; save(); closeSheet(); renderRide(); toast('Miłej podróży '+vIcon(d.line,d.mode)); };
+    S.active={...d}; save(); closeSheet(); renderRide(); toast('Miłej podróży '+vIcon(d.line,d.mode));
+    const id=S.active.id; fillSched({...S.active},'dep').then(x=>{ if(S.active && S.active.id===id){ S.active.schedDep=x.schedDep; S.active.schedInfo=x.schedInfo; save(); renderRide(); } }); };
 }
 
 /* ---------- KONIEC ---------- */
@@ -783,6 +844,7 @@ async function endRide(){
         <div class="field"><label>Godzina przyjazdu</label><input class="f num" id="f-arr" inputmode="numeric" value="${esc(d.arr)}"></div>
         <div class="field"><label>Czas podróży</label><input class="f num" id="f-dur" value="${fmtDur(dur)}" disabled></div>
       </div>
+      <div class="schedline" id="schedline">${schedLineHtml(d)}</div>
       <div class="field"><label>Przystanek końcowy</label><input class="f" id="f-to" list="stopnames" value="${esc(d.to)}" placeholder="wybierz lub wpisz">
         <div class="status">${ctx.gpsMsg||'<i class="spin"></i> ustalam pozycję…'}</div>${stopCandsHtml(ctx.stops, d.to, ctx.extra)}</div>
       <div class="row3">
@@ -793,8 +855,9 @@ async function endRide(){
       ${notesHtml(d.notes, d.mode||modeOf(d.line))}
       <div class="actions"><button class="btn" id="b-x">Wróć</button><button class="btn pri" id="b-ok">Zapisz przejazd</button></div>`, ctx.drawn); ctx.drawn=true;
     const b=$('#sheet-body');
-    b.querySelectorAll('[data-stop]').forEach(x=>x.onclick=()=>{ readDraft(ctx); ctx.draft.to=x.dataset.stop; draw(); });
-    $('#f-arr').oninput=()=>{ const x=normTimeInput($('#f-arr').value); $('#f-dur').value=fmtDur(durSec({dep:d.dep, arr:x})); };
+    b.querySelectorAll('[data-stop]').forEach(x=>x.onclick=()=>{ readDraft(ctx); ctx.draft.to=x.dataset.stop; draw(); recalcArr(); });
+    $('#f-arr').oninput=()=>{ const x=normTimeInput($('#f-arr').value); $('#f-dur').value=fmtDur(durSec({dep:d.dep, arr:x})); $('#schedline').innerHTML=schedLineHtml({...d, arr:x}); };
+    $('#f-to').onchange=()=>{ readDraft(ctx); recalcArr(); };
     bindNotes(b);
     $('#b-x').onclick=closeSheet;
     $('#b-ok').onclick=()=>{ readDraft(ctx); const d=ctx.draft; if(parseTime(d.arr)==null) return toast('Podaj godzinę przyjazdu hh:mm:ss');
@@ -802,6 +865,9 @@ async function endRide(){
       const r={...d, sync:'add'}; delete r.headsign; delete r.feed;
       S.rides.unshift(r); sortRides(); S.active=null; save(); closeSheet(); renderAll(); toast('Zapisano przejazd'); sync(); };
   };
+  let calcN=0;
+  const recalcArr=async()=>{ const n=++calcN; const x=await fillSched({...ctx.draft}, ctx.draft.schedInfo?'arr':'both');
+    if(n!==calcN || SHEET_CTX!==ctx) return; keepInputs(ctx); Object.assign(ctx.draft,{schedArr:x.schedArr, schedInfo:x.schedInfo, schedDep:ctx.draft.schedDep||x.schedDep}); draw(); };
   draw();
   // pozycja pojazdu (jego bieżący przystanek) – niezależnie od GPS telefonu
   const vehP = (async()=>{ if(!a.vehicleId || !a.feed) return;
@@ -812,10 +878,15 @@ async function endRide(){
     let near=groupStops(nearStops(pos, S.settings.buffer)); let msg;
     if(near.length){ msg=`±${pos.acc} m · w buforze ${S.settings.buffer} m`; ctx.draft.to=ctx.draft.to||near[0].name; }
     else { near=groupStops(nearStops(pos,300)).slice(0,4).map(g=>({...g,out:true})); msg=`±${pos.acc} m · brak przystanku w buforze ${S.settings.buffer} m`; }
-    ctx.stops=near; ctx.gpsMsg=msg; draw();
+    ctx.stops=near; ctx.gpsMsg=msg; draw(); recalcArr();
   }catch(e){ keepInputs(ctx); ctx.gpsMsg='⚠️ '+esc(e.message); draw(); }
   await vehP; keepInputs(ctx);
-  if(ctx.vehStop && !ctx.stops.some(g=>g.name===ctx.vehStop)){ ctx.extra=[{name:ctx.vehStop, note:'wg pozycji pojazdu'}]; if(!ctx.draft.to) ctx.draft.to=ctx.vehStop; draw(); }
+  if(ctx.vehStop && !ctx.stops.some(g=>g.name===ctx.vehStop)){ ctx.extra=[{name:ctx.vehStop, note:'wg pozycji pojazdu'}]; if(!ctx.draft.to){ ctx.draft.to=ctx.vehStop; recalcArr(); } draw(); }
+}
+function schedLineHtml(d){
+  const p=[]; if(d.schedDep) p.push(`odjazd wg rozkładu ${esc(d.schedDep.slice(0,5))} <b class="dev ${devCls(devSec(d.dep,d.schedDep))}">${fmtDev(devSec(d.dep,d.schedDep))}</b>`);
+  if(d.schedArr) p.push(`przyjazd wg rozkładu ${esc(d.schedArr.slice(0,5))} <b class="dev ${devCls(devSec(d.arr,d.schedArr))}">${fmtDev(devSec(d.arr,d.schedArr))}</b>`);
+  return p.length? p.join(' · ') : (d.schedInfo===null? 'nie znaleziono kursu w rozkładzie' : '');
 }
 
 /* ---------- EDYCJA ---------- */
@@ -834,6 +905,12 @@ function openEdit(r, isActive){
       ${isActive?'':`<div class="field"><label>Godzina przyjazdu</label><input class="f num" id="f-arr" inputmode="numeric" value="${esc(d.arr)}" placeholder="hh:mm:ss"></div>`}
     </div>
     ${isActive?'':`<div class="field"><label>Czas podróży (wyliczany)</label><input class="f num" id="f-dur" value="${fmtDur(durSec(d))}" disabled></div>`}
+    <div class="row2">
+      <div class="field"><label>Odjazd wg rozkładu</label><input class="f num" id="f-sdep" inputmode="numeric" value="${esc(d.schedDep||'')}" placeholder="hh:mm:ss"></div>
+      ${isActive?'':`<div class="field"><label>Przyjazd wg rozkładu</label><input class="f num" id="f-sarr" inputmode="numeric" value="${esc(d.schedArr||'')}" placeholder="hh:mm:ss"></div>`}
+    </div>
+    <div class="schedline" id="schedline">${schedLineHtml(d)}</div>
+    <button type="button" class="btn sm" id="b-sched" style="margin-top:8px">Uzupełnij z rozkładu</button>
     <div class="field"><label>Przystanek początkowy</label><input class="f" id="f-from" list="stopnames" value="${esc(d.from)}"></div>
     ${isActive?'':`<div class="field"><label>Przystanek końcowy</label><input class="f" id="f-to" list="stopnames" value="${esc(d.to)}"></div>`}
     <div class="row2">
@@ -844,6 +921,13 @@ function openEdit(r, isActive){
     <div class="actions">${(!isActive && r.date && S.rides.includes(r))?'<button class="btn danger" id="b-del">Usuń</button>':''}<button class="btn" id="b-x">Anuluj</button><button class="btn pri" id="b-ok">Zapisz</button></div>`);
   $('#b-x').onclick=closeSheet;
   bindNotes($('#sheet-body'));
+  const updSched=()=>{ readDraft(ctx); $('#schedline').innerHTML=schedLineHtml(ctx.draft); };
+  ['f-sdep','f-sarr','f-dep','f-arr'].forEach(id=>{ const e=$('#'+id); if(e) e.addEventListener('change',updSched); });
+  $('#b-sched').onclick=async()=>{ readDraft(ctx); const b=$('#b-sched'); b.disabled=true; b.textContent='Szukam kursu…';
+    const x=await fillSched({...ctx.draft, schedInfo:null, tripId:ctx.draft.tripId}, isActive?'dep':'both');
+    if(SHEET_CTX!==ctx) return; b.disabled=false; b.textContent='Uzupełnij z rozkładu';
+    if(!x.schedDep && !x.schedArr){ toast('Nie znaleziono kursu (rozkład obejmuje tylko wczoraj–pojutrze)'); return; }
+    ctx.draft.schedInfo=x.schedInfo; $('#f-sdep').value=x.schedDep||''; if($('#f-sarr')) $('#f-sarr').value=x.schedArr||''; updSched(); };
   const updDur=()=>{ const e=$('#f-dur'); if(e) e.value=fmtDur(durSec({dep:normTimeInput($('#f-dep').value), arr:normTimeInput($('#f-arr')?.value)})); };
   $('#f-dep').oninput=updDur; if($('#f-arr')) $('#f-arr').oninput=updDur;
   const del=$('#b-del'); if(del) del.onclick=()=>{ if(!confirm('Usunąć ten przejazd (także z arkusza)?')) return;
@@ -866,7 +950,7 @@ function openEdit(r, isActive){
 let histLimit=120;
 function rideCard(r){
   const d=durSec(r);
-  const sub=[r.dep&&r.dep, r.vehicle&&(vIcon(r.line,r.mode)+' '+r.vehicle), r.brigade&&('bryg. '+r.brigade), r.notes&&('📝 '+r.notes), r.dateSrc==='guess'&&'≈ data wyliczona', r.sync==='conflict'&&'⚠ konflikt z arkuszem'].filter(Boolean).join(' · ');
+  const sub=[r.dep&&r.dep, r.vehicle&&(vIcon(r.line,r.mode)+' '+r.vehicle), r.brigade&&('bryg. '+r.brigade), r.notes&&('📝 '+r.notes), (r.schedDep||r.schedArr)&&('⏱ '+[r.schedDep&&fmtDev(devSec(r.dep,r.schedDep)), r.schedArr&&fmtDev(devSec(r.arr,r.schedArr))].filter(Boolean).join(' / ')), r.dateSrc==='guess'&&'≈ data wyliczona', r.sync==='conflict'&&'⚠ konflikt z arkuszem'].filter(Boolean).join(' · ');
   return `<div class="card ride" data-k="${esc(rkey(r))}"><span class="badge ${badgeCls(r.line,r.mode)}">${esc(r.line||'?')}</span>
     <div style="min-width:0"><div class="stops">${esc(r.from||'—')}<i>→</i>${esc(r.to||'—')}</div><div class="sub num">${esc(sub)}${r.sync&&r.sync!=='ok'?'<span class="pend" title="czeka na wysłanie"></span>':''}</div></div>
     <div class="dur num">${fmtDur(d)}<small>${esc(r.arr? r.arr.slice(0,5):'')}</small></div></div>`;
@@ -936,6 +1020,7 @@ function renderStats(){
     <h2>Przejazdy w miesiącach</h2>
     <div class="card"><div class="cols">${mk.map(k=>`<div class="c" title="${k}: ${months.get(k)||0}"><i style="height:${((months.get(k)||0)/mmx*100).toFixed(1)}%"></i></div>`).join('')}</div>
       <div class="cols-x">${mk.map((k,i)=>`<span>${(mk.length<=12||i%3===0)?PL_MON_S[+k.slice(5)-1]+(k.endsWith('-01')||i===0?" '"+k.slice(2,4):''):''}</span>`).join('')}</div></div>
+    ${punctHtml(list)}
     <h2>Najczęstsze linie</h2>${bars(lines,12,lineBadge,k=>modeOf(k))}
     <h2>Pora odjazdu</h2>
     <div class="card"><div class="cols" style="height:110px">${hours.map((v,h)=>`<div class="c" title="${h}:00 – ${v}"><i style="height:${(v/hmx*100).toFixed(1)}%"></i></div>`).join('')}</div>
@@ -946,6 +1031,26 @@ function renderStats(){
     <h2>Najczęstsze relacje</h2>${bars(rel,8,null,null,true)}
     <div style="height:20px"></div>`;
   bindRideCards(body);
+}
+
+function punctHtml(list){
+  const dd=list.map(r=>r.schedDep? devSec(r.dep,r.schedDep) : null).filter(x=>x!=null && Math.abs(x)<3600);
+  const da=list.map(r=>r.schedArr? devSec(r.arr,r.schedArr) : null).filter(x=>x!=null && Math.abs(x)<3600);
+  if(!dd.length && !da.length) return '';
+  const avg=a=>a.length? Math.round(a.reduce((x,y)=>x+y,0)/a.length) : null;
+  const ok=a=>a.length? Math.round(a.filter(x=>x>=-60&&x<=180).length/a.length*100)+'%' : '–';
+  const byLine=new Map(); for(const r of list){ if(!r.schedArr) continue; const d=devSec(r.arr,r.schedArr); if(d==null||Math.abs(d)>=3600) continue;
+    const k=String(r.line); const o=byLine.get(k)||{n:0,s:0}; o.n++; o.s+=d; byLine.set(k,o); }
+  const rows=[...byLine.entries()].filter(([,o])=>o.n>=3).map(([k,o])=>[k,Math.round(o.s/o.n),o.n]).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const mx=Math.max(60,...rows.map(r=>Math.abs(r[1])));
+  return `<h2>Zgodność z rozkładem</h2>
+    <div class="kgrid">
+      <div class="card kpi"><b class="num dev ${devCls(avg(dd))}">${fmtDev(avg(dd))}</b><span>średnie odchylenie odjazdu · ${dd.length} przejazdów</span></div>
+      <div class="card kpi"><b class="num dev ${devCls(avg(da))}">${fmtDev(avg(da))}</b><span>średnie odchylenie przyjazdu · ${da.length} przejazdów</span></div>
+      <div class="card kpi"><b class="num">${ok(dd)}</b><span>punktualnych odjazdów (−1…+3 min)</span></div>
+      <div class="card kpi"><b class="num">${ok(da)}</b><span>punktualnych przyjazdów (−1…+3 min)</span></div>
+    </div>
+    ${rows.length?`<div class="card bars" style="margin-top:10px"><div class="small faint" style="margin-bottom:4px">średnie odchylenie przyjazdu wg linii (min. 3 przejazdy)</div>${rows.map(([k,v,n])=>`<div class="brow"><span class="lbl"><span class="badge sm ${badgeCls(k)}">${esc(k)}</span></span><span class="trk"><i style="width:${(Math.abs(v)/mx*100).toFixed(1)}%;background:var(--${v>180?'err':v<-60?'warn':'ok'})"></i></span><span class="v num">${fmtDev(v)}</span></div>`).join('')}</div>`:''}`;
 }
 
 /* ---------------- widok: ustawienia ---------------- */
