@@ -68,6 +68,7 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink3
 .go:active{transform:scale(.97)}
 .go svg{width:22px;height:22px}
 .go.end{background:var(--err);color:#fff;box-shadow:0 10px 30px -8px rgba(194,59,48,.55)}
+.go.depart{background:var(--ok);color:#fff;box-shadow:0 10px 30px -8px color-mix(in srgb,var(--ok) 60%,transparent);height:72px;font-size:22px}
 .go.ghost{background:transparent;color:var(--ink2);box-shadow:none;height:44px;font-size:15px;font-weight:600;margin-top:4px}
 .today{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
 .kpi{padding:14px 14px 12px}
@@ -260,6 +261,8 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
       <div class="field"><label>Katalog danych statycznego GTFS</label><input class="f" id="s-data" autocapitalize="off"></div>
       <div class="hint" id="s-static-info"></div>
       <div class="inl" style="margin-top:12px"><button class="btn sm" id="b-diag">Diagnostyka GTFS-RT w pobliżu</button></div>
+      <div class="inl" style="margin-top:8px"><button class="btn sm" id="b-backfill">Uzupełnij rozkład dla ostatnich przejazdów</button></div>
+      <div class="hint" id="backfill-info">Dopasowuje do rozkładu przejazdy z wczoraj i dziś, które nie mają jeszcze godzin rozkładowych.</div>
       <div id="diag"></div>
     </div>
     <h2>Dane</h2>
@@ -293,16 +296,16 @@ const DEFAULTS = { backend:'', key:'', dataUrl:'./data/', buffer:20, vehRadius:6
   feeds:['A','T'], vehField:'auto', brigadeRule:'auto', brigadeRegex:'', brigadeTramsOnly:true, theme:'', postMode:'code', postRegex:'', postMerge:true };
 
 /* ---------------- stan ---------------- */
-const S = { settings:{...DEFAULTS}, rides:[], active:null, lastPull:0, statsRange:'all' };
+const S = { settings:{...DEFAULTS}, rides:[], active:null, prepared:null, lastPull:0, statsRange:'all' };
 function load(){
   try{
     const j = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
     S.settings = {...DEFAULTS, ...(j.settings||{})};
-    S.rides = j.rides || []; S.active = j.active || null; S.lastPull = j.lastPull || 0;
+    S.rides = j.rides || []; S.active = j.active || null; S.prepared = j.prepared || null; S.lastPull = j.lastPull || 0;
   }catch(e){ console.warn('storage', e); }
 }
 function save(){
-  try{ localStorage.setItem(LS_KEY, JSON.stringify({settings:S.settings, rides:S.rides, active:S.active, lastPull:S.lastPull})); }
+  try{ localStorage.setItem(LS_KEY, JSON.stringify({settings:S.settings, rides:S.rides, active:S.active, prepared:S.prepared, lastPull:S.lastPull})); }
   catch(e){ toast('Nie udało się zapisać w pamięci telefonu'); }
 }
 
@@ -714,6 +717,24 @@ function renderRide(){
     $('#b-end').onclick=endRide; $('#b-cancel').onclick=()=>{ if(confirm('Anulować bieżący przejazd?')){ S.active=null; save(); renderRide(); } };
     $('#b-edit-active').onclick=()=>openEdit(S.active, true);
     const an=$('#active-notes'); bindNotes(an, ()=>{ if(!S.active) return; S.active.notes=readNotes(an, m); save(); });
+  } else if(S.prepared){
+    const p=S.prepared; const m=p.mode||modeOf(p.line);
+    el.innerHTML=`
+    <div class="card live ${m}"><div class="stripe"></div>
+      <div class="small faint" style="font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">gotowy do odjazdu</div>
+      <div class="live-head"><span class="badge lg ${badgeCls(p.line,p.mode)}">${esc(p.line||'?')}</span>
+        <div><div style="font-weight:750;font-size:17px">${p.headsign? '→ '+esc(p.headsign) : (m==='T'?'Tramwaj':'Autobus')}</div>
+        <div class="small faint">${esc(p.from||'przystanek nieustalony')}</div></div></div>
+      <div class="meta">${p.vehicle?`<span class="chip">${vIcon(p.line,p.mode)} ${esc(p.vehicle)}</span>`:'<span class="chip">pojazd ustalę po odjeździe</span>'}${p.brigade?`<span class="chip">brygada ${esc(p.brigade)}</span>`:''}</div>
+      <div class="clock num" id="clock" style="text-align:center;margin-top:18px;font-size:44px"></div>
+    </div>
+    <button class="go depart" id="b-depart-home"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>Odjazd!</button>
+    <div style="display:flex;gap:8px;max-width:340px;margin:0 auto"><button class="go ghost" id="b-prep-edit">Zmień / odśwież</button><button class="go ghost" id="b-prep-cancel">Anuluj</button></div>`;
+    const c=()=>{ const d=new Date(); const e=$('#clock'); if(e) e.innerHTML=`${pad(d.getHours())}:${pad(d.getMinutes())}<span class="s">:${pad(d.getSeconds())}</span>`; };
+    c(); tick=setInterval(c,1000);
+    $('#b-depart-home').onclick=()=>{ const t=new Date(); const p=S.prepared; if(p) depart(p, t); };
+    $('#b-prep-edit').onclick=()=>startRide(S.prepared);
+    $('#b-prep-cancel').onclick=()=>{ S.prepared=null; save(); renderRide(); };
   } else {
     const t=visibleRides(); const today=fmtDate(now); const tr=t.filter(r=>r.date===today);
     const tsum=tr.reduce((s,r)=>s+(durSec(r)||0),0); const last=t[0];
@@ -721,7 +742,7 @@ function renderRide(){
     <div class="card hero">
       <div class="clock num" id="clock"></div>
       <button class="go" id="b-start"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>Rozpocznij przejazd</button>
-      <div class="small faint">czas odjazdu zapisze się w chwili naciśnięcia</div>
+      <div class="small faint">najpierw wybierzesz przystanek i pojazd, a godzinę zapiszesz przyciskiem „Odjazd!”</div>
     </div>
     <div class="today">
       <div class="card kpi"><b class="num">${tr.length}</b><span>przejazdy dziś</span></div>
@@ -731,7 +752,7 @@ function renderRide(){
     ${last?`<h2>Ostatni przejazd</h2>${rideCard(last)}`:''}`;
     const c=()=>{ const d=new Date(); const e=$('#clock'); if(e) e.innerHTML=`${pad(d.getHours())}:${pad(d.getMinutes())}<span class="s">:${pad(d.getSeconds())}</span>`; };
     c(); tick=setInterval(c,1000);
-    $('#b-start').onclick=startRide;
+    $('#b-start').onclick=()=>startRide();
     bindRideCards(el);
   }
   renderChips();
@@ -760,24 +781,19 @@ function sugHtml(list, selObj){
 }
 
 /* ---------- START ---------- */
-async function startRide(){
-  const t=new Date();
-  const ctx = SHEET_CTX = { kind:'start', draft:{ id:uid(), date:fmtDate(t), dep:fmtTime(t), from:'', line:'', brigade:'', vehicle:'', to:'', arr:'', notes:'', mode:'' }, stops:[], sugs:[], sel:null, pos:null };
-  const prev=visibleRides()[0];
-  const prevEndRecent = prev && prev.to && prev.date===ctx.draft.date && (parseTime(ctx.draft.dep)-parseTime(prev.arr))<5400 && (parseTime(ctx.draft.dep)-parseTime(prev.arr))>=0;
+async function startRide(existing){
+  const ctx = SHEET_CTX = { kind:'start', draft: existing ? {...existing} : { id:uid(), from:'', line:'', brigade:'', vehicle:'', to:'', arr:'', notes:'', mode:'' }, stops:[], sugs:[], sel:null, pos:null };
+  const prev=visibleRides()[0]; const nowS=parseTime(fmtTime(new Date()));
+  const prevEndRecent = prev && prev.to && prev.date===fmtDate(new Date()) && parseTime(prev.arr)!=null && (nowS-parseTime(prev.arr))<5400 && (nowS-parseTime(prev.arr))>=0;
   const draw=()=>{
     if(SHEET_CTX!==ctx) return; const d=ctx.draft;
     const extra = prevEndRecent && !ctx.stops.some(g=>g.name===prev.to) ? [{name:prev.to, note:'koniec poprzedniego'}] : [];
     openSheet(`
-      <h3>Nowy przejazd</h3><div class="small faint">${dayLabel(d.date)}</div>
-      <div class="row2">
-        <div class="field"><label>Godzina odjazdu</label><input class="f num" id="f-dep" inputmode="numeric" value="${esc(d.dep)}"></div>
-        <div class="field"><label>Data</label><input class="f" id="f-date" type="date" value="${esc(d.date)}"></div>
-      </div>
+      <h3>Przygotuj przejazd</h3><div class="small faint">sprawdź przystanek i pojazd – godzina zapisze się po dotknięciu „Odjazd!”</div>
       <div class="field"><label>Przystanek początkowy</label><input class="f" id="f-from" list="stopnames" value="${esc(d.from)}" placeholder="wybierz lub wpisz">
         <div class="status" id="st-gps">${ctx.gpsMsg||'<i class="spin"></i> ustalam pozycję…'}</div>
         ${stopCandsHtml(ctx.stops, d.from, extra)}</div>
-      <div class="field"><label>Linia – podpowiedzi</label>
+      <div class="field"><label style="display:flex;justify-content:space-between;align-items:center">Linia – podpowiedzi <button type="button" class="btn sm" id="b-refresh" style="height:30px" ${ctx.busy?'disabled':''}>↻ Odśwież</button></label>
         <div class="status">${ctx.rtMsg||'<i class="spin"></i> szukam pojazdów w pobliżu…'}</div>
         ${sugHtml(ctx.sugs, ctx.selObj)}</div>
       <div class="row3">
@@ -785,25 +801,32 @@ async function startRide(){
         <div class="field"><label>Brygada</label><input class="f num" id="f-brig" value="${esc(d.brigade)}"></div>
         <div class="field"><label>Nr taborowy</label><input class="f" id="f-veh" value="${esc(d.vehicle)}" autocapitalize="characters"></div>
       </div>
-      <div class="actions"><button class="btn" id="b-x">Anuluj</button><button class="btn pri" id="b-ok">Jadę ▸</button></div>`, ctx.drawn); ctx.drawn=true;
+      <button class="go depart" id="b-depart" style="margin-top:22px"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>Odjazd!</button>
+      <div class="actions" style="margin-top:10px"><button class="btn" id="b-x">Anuluj</button><button class="btn" id="b-ok">Gotowe, czekam</button></div>`, ctx.drawn); ctx.drawn=true;
     bindStart(ctx);
   };
   ctx.redraw=draw; draw();
-  try{
-    const pos = ctx.pos = await locate();
-    if(!G.ok) await loadStatic();
-    keepInputs(ctx);
-    let near=groupStops(nearStops(pos, S.settings.buffer));
-    if(near.length){ ctx.draft.from = ctx.draft.from || near[0].name; ctx.gpsMsg=`±${pos.acc} m · ${near.length} ${near.length===1?'przystanek':'przystanki'} w buforze ${S.settings.buffer} m`; }
-    else { near=groupStops(nearStops(pos, 300)).slice(0,4).map(g=>({...g,out:true})); ctx.gpsMsg=`±${pos.acc} m · brak przystanku w buforze ${S.settings.buffer} m${near.length?' – najbliższe:':''}`;
+  ctx.search=async()=>{
+    ctx.busy=true; ctx.gpsMsg=''; ctx.rtMsg=''; keepInputs(ctx); draw();
+    try{
+      const pos = ctx.pos = await locate();
+      if(!G.ok) await loadStatic();
+      keepInputs(ctx); ctx.draft.lat=pos.lat; ctx.draft.lon=pos.lon;
+      let near=groupStops(nearStops(pos, S.settings.buffer));
+      if(near.length){ ctx.draft.from = ctx.draft.from || near[0].name; ctx.gpsMsg=`±${pos.acc} m · ${near.length} ${near.length===1?'przystanek':'przystanki'} w buforze ${S.settings.buffer} m`; }
+      else { near=groupStops(nearStops(pos, 300)).slice(0,4).map(g=>({...g,out:true})); ctx.gpsMsg=`±${pos.acc} m · brak przystanku w buforze ${S.settings.buffer} m${near.length?' – najbliższe:':''}`;
+        if(prevEndRecent && !ctx.draft.from) ctx.draft.from=prev.to; }
+      ctx.stops=near; draw();
+      const inBuf = near.filter(g=>!g.out); const useStops = inBuf.length? inBuf : near.slice(0,1);
+      await suggestLines(pos, useStops, (list, rtOk)=>{ keepInputs(ctx); ctx.sugs=list;
+        ctx.rtMsg = list.length ? (rtOk? 'dotknij, aby wybrać' : 'GTFS-RT niedostępny – podpowiedzi z rozkładu') : (rtOk? 'nie znaleziono pojazdu w pobliżu – odśwież, gdy podjedzie, albo wpisz ręcznie' : 'GTFS-RT niedostępny – wpisz ręcznie');
+        if(ctx.selObj){ const same=list.find(x=>x.tripId && x.tripId===ctx.selObj.tripId); ctx.selObj=same||null; }
+        draw(); });
+    }catch(e){ keepInputs(ctx); ctx.gpsMsg='⚠️ '+esc(e.message)+' – wpisz przystanek ręcznie'; ctx.rtMsg = ctx.rtMsg||'wpisz linię ręcznie';
       if(prevEndRecent && !ctx.draft.from) ctx.draft.from=prev.to; }
-    ctx.stops=near; draw();
-    const inBuf = near.filter(g=>!g.out); const useStops = inBuf.length? inBuf : near.slice(0,1);
-    await suggestLines(pos, useStops, (list, rtOk)=>{ keepInputs(ctx); ctx.sugs=list;
-      ctx.rtMsg = list.length ? (rtOk? 'dotknij, aby wybrać' : 'GTFS-RT niedostępny – podpowiedzi z rozkładu') : (rtOk? 'nie znaleziono pojazdu w pobliżu – wpisz ręcznie' : 'GTFS-RT niedostępny – wpisz ręcznie');
-      draw(); });
-  }catch(e){ keepInputs(ctx); ctx.gpsMsg='⚠️ '+esc(e.message)+' – wpisz przystanek ręcznie'; ctx.rtMsg = ctx.rtMsg||'wpisz linię ręcznie';
-    if(prevEndRecent && !ctx.draft.from) ctx.draft.from=prev.to; draw(); }
+    ctx.busy=false; draw();
+  };
+  ctx.search();
 }
 function readDraft(ctx){
   const d=ctx.draft, v=id=>{ const e=$('#'+id); return e? e.value.trim() : undefined; };
@@ -823,13 +846,38 @@ function bindStart(ctx){
     // pojazd stoi na przystanku → jego stop_id wskazuje dokładny słupek
     if(s.atStop && s.stopKey){ const st=stopById(s.stopKey); if(st) ctx.draft.from=stopLabel(st); }
     ctx.redraw(); });
-  $('#b-x').onclick=closeSheet;
-  $('#b-ok').onclick=()=>{ readDraft(ctx); const d=ctx.draft;
-    if(parseTime(d.dep)==null) return toast('Podaj godzinę w formacie hh:mm:ss');
+  $('#b-x').onclick=()=>{ if(S.prepared && S.prepared.id===ctx.draft.id){ S.prepared=null; save(); renderRide(); } closeSheet(); };
+  $('#b-refresh').onclick=()=>{ if(!ctx.busy) ctx.search(); };
+  const finalize=()=>{ readDraft(ctx); const d=ctx.draft;
+    d.mode = (ctx.selObj && d.line===ctx.selObj.line) ? ctx.selObj.mode : modeOf(d.line); return d; };
+  $('#b-ok').onclick=()=>{ const d=finalize(); S.prepared={...d}; save(); closeSheet(); renderRide(); };
+  $('#b-depart').onclick=()=>{ const t=new Date(); const d=finalize();
     if(!d.line && !confirm('Nie podano linii. Rozpocząć mimo to?')) return;
-    d.mode = d.mode && ctx.sel!=null ? d.mode : modeOf(d.line);
-    S.active={...d}; save(); closeSheet(); renderRide(); toast('Miłej podróży '+vIcon(d.line,d.mode));
-    const id=S.active.id; fillSched({...S.active},'dep').then(x=>{ if(S.active && S.active.id===id){ S.active.schedDep=x.schedDep; S.active.schedInfo=x.schedInfo; save(); renderRide(); } }); };
+    closeSheet(); depart(d, t); };
+}
+/** „Odjazd!” – zapisuje dokładną godzinę i rozpoczyna przejazd. */
+function depart(d, t){
+  t=t||new Date();
+  S.active={...d, date:fmtDate(t), dep:fmtTime(t)}; S.prepared=null; save(); renderRide(); toast('Odjazd '+fmtTime(t)+' · miłej podróży '+vIcon(d.line,d.mode));
+  const id=S.active.id;
+  fillSched({...S.active},'dep').then(x=>{ if(S.active && S.active.id===id){ S.active.schedDep=x.schedDep; S.active.schedInfo=x.schedInfo; save(); renderRide(); } });
+  if(!S.active.vehicle) findVehicleAfterDepart(id);
+}
+/** Gdy przy przygotowaniu pojazdu jeszcze nie było – szukamy go po odjeździe (ten sam kurs albo ta sama linia najbliżej). */
+async function findVehicleAfterDepart(id){
+  const a=S.active; if(!a || a.lat==null || !a.line) return;
+  try{
+    const feeds=S.settings.feeds; const bufs=await getFeeds(feeds.map(f=>'VehiclePositions_'+f), 0); await ensureTrips();
+    let best=null;
+    for(const f of feeds){ const b=bufs['VehiclePositions_'+f]; if(!b) continue;
+      for(const v of decodeVP(b,f)){ const sg=sugFromTrip(v); const d=dist({lat:a.lat,lon:a.lon},v);
+        const match = (a.tripId && v.tripId===a.tripId) || (sg.line===String(a.line) && d<=Math.max(150,S.settings.vehRadius*2));
+        if(match && (!best || d<best.d)) best={...sg, d}; } }
+    if(!best || !S.active || S.active.id!==id || S.active.vehicle) return;
+    Object.assign(S.active,{ vehicle:best.vehicle, vehicleId:best.vehicleId, tripId:S.active.tripId||best.tripId, feed:best.feed, headsign:S.active.headsign||best.headsign,
+      brigade: S.active.brigade || ((S.settings.brigadeTramsOnly && best.mode!=='T') ? '' : best.brigade) });
+    save(); renderRide(); toast('Znaleziono pojazd '+best.vehicle);
+  }catch(e){ console.warn(e); }
 }
 
 /* ---------- KONIEC ---------- */
@@ -1088,6 +1136,7 @@ function bindSet(){
     if(!confirm(p?`Uwaga: ${p} przejazdów nie trafiło jeszcze do arkusza i przepadną. Wyczyścić?`:'Wyczyścić lokalną kopię przejazdów? (arkusz pozostanie bez zmian)')) return;
     S.rides=[]; S.active=null; S.lastPull=0; save(); renderAll(); };
   $('#b-diag').onclick=diag;
+  $('#b-backfill').onclick=backfill;
 }
 function applyTheme(){ const t=S.settings.theme; if(t) document.documentElement.dataset.theme=t; else delete document.documentElement.dataset.theme; }
 function exportCsv(){
@@ -1096,6 +1145,22 @@ function exportCsv(){
   const rows=[...visibleRides()].reverse().map(r=>[r.date,r.dep,r.from,r.line,r.brigade,r.vehicle,r.to,r.arr,fmtDur(durSec(r)),r.notes].map(q).join(';'));
   const blob=new Blob(['﻿'+[head.join(';'),...rows].join('\r\n')],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`przejazdy-${fmtDate(new Date())}.csv`; document.body.appendChild(a); a.click(); a.remove();
+}
+async function backfill(){
+  const info=$('#backfill-info'), btn=$('#b-backfill'); const today=new Date();
+  const days=new Set([fmtDate(new Date(today-864e5)), fmtDate(today)]);
+  const todo=visibleRides().filter(r=>days.has(r.date) && !r.schedDep && !r.schedArr && r.line && r.from && parseTime(r.dep)!=null);
+  if(!todo.length){ info.textContent='Brak przejazdów z wczoraj i dziś bez godzin rozkładowych.'; return; }
+  if(!G.ok) await loadStatic(); btn.disabled=true; let ok=0;
+  for(const [i,r] of todo.entries()){
+    info.textContent=`Dopasowuję ${i+1}/${todo.length}…`;
+    const x=await fillSched({...r, schedInfo:null}, 'both'); if(!x.schedDep && !x.schedArr) continue;
+    r.schedDep=x.schedDep; r.schedArr=x.schedArr; r.schedInfo=x.schedInfo;
+    if(r.sync==='ok'||r.sync==='conflict'){ if(!r.id){ r.orig={date:r.dateRaw??r.date, dep:r.dep}; r.id=uid(); r.keepDateEmpty = r.dateRaw===''; } r.sync='update'; }
+    ok++;
+  }
+  save(); btn.disabled=false; info.textContent=`Uzupełniono ${ok} z ${todo.length} przejazdów.${ok<todo.length?' Pozostałych nie udało się dopasować do kursu – możesz je wpisać ręcznie w edycji.':''}`;
+  renderChips(); sync();
 }
 async function diag(){
   const el=$('#diag'); el.innerHTML='<div class="status"><i class="spin"></i> pobieram GTFS-RT i pozycję…</div>';
