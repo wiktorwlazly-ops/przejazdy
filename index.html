@@ -371,6 +371,7 @@ function readNotes(root, mode){
   return composeNotes(tags, box.querySelector('.notes-other')?.value, mode);
 }
 
+const vIcon = (line, mode) => modeOf(line, mode)==='A' ? '🚌' : '🚋';
 let toastT; function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('on'),2600); }
 async function fetchT(url, opt={}, ms=10000){ const c=new AbortController(); const t=setTimeout(()=>c.abort(),ms);
   try{ return await fetch(url,{...opt,signal:c.signal}); } finally{ clearTimeout(t); } }
@@ -568,15 +569,15 @@ function locate(maxMs=8000, good=10){
 
 /* ---------------- arkusz: synchronizacja ---------------- */
 let syncing=false;
-function payload(r){ return { id:r.id, row:r.row||null, orig:r.orig||null, date:r.date, dep:r.dep, from:r.from, line:r.line,
+function payload(r){ return { id:r.id, row:r.row||null, orig:r.orig||null, keepDateEmpty:!!r.keepDateEmpty, date:r.date, dep:r.dep, from:r.from, line:r.line,
   brigade:r.brigade, vehicle:r.vehicle, to:r.to, arr:r.arr, notes:r.notes }; }
 async function post(body){
   const r=await fetchT(S.settings.backend,{method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({key:S.settings.key, ...body})},20000);
   return r.json();
 }
 async function sync(quiet){
-  const st=S.settings; if(!st.backend||syncing) return; const queue=S.rides.filter(r=>r.sync && r.sync!=='ok'); if(!queue.length) return;
-  syncing=true; renderChips(); let done=0;
+  const st=S.settings; if(!st.backend||syncing) return; const queue=S.rides.filter(r=>r.sync && r.sync!=='ok' && r.sync!=='conflict'); if(!queue.length) return;
+  syncing=true; renderChips(); let done=0, conflicts=0;
   try{
     for(const r of queue){
       const res=await post({action:r.sync, ride:payload(r)});
@@ -587,12 +588,14 @@ async function sync(quiet){
         done++; save();
       } else if(res.error==='not_found'){
         if(r.sync==='delete'){ S.rides=S.rides.filter(x=>x!==r); }
-        else { r.sync='add'; delete r.orig; delete r.row; }   // wiersz zniknął – dopisz od nowa
+        else if(r.row){ r.sync='conflict'; conflicts++; }   // wiersz w arkuszu zmienił się – nie nadpisujemy w ciemno
+        else { r.sync='add'; delete r.orig; }
         save();
       } else if(res.error==='auth'){ toast('Zły klucz Apps Script'); break; }
       else { console.warn(res); break; }
     }
-    if(!quiet && done) toast(`Wysłano do arkusza: ${done}`);
+    if(conflicts) toast(`${conflicts} edycji nie pasuje do arkusza – pobierz historię ponownie i popraw`);
+    else if(!quiet && done) toast(`Wysłano do arkusza: ${done}`);
   }catch(e){ if(!quiet) toast('Brak połączenia z arkuszem – spróbuję później'); }
   finally{ syncing=false; renderAll(); }
 }
@@ -602,7 +605,7 @@ async function pull(){
     await sync(true);
     const j=await (await fetchT(`${st.backend}?action=list&key=${encodeURIComponent(st.key)}`,{},40000)).json();
     if(!j.ok) throw new Error(j.error);
-    const pending=S.rides.filter(r=>r.sync && r.sync!=='ok');
+    const pending=S.rides.filter(r=>r.sync && r.sync!=='ok' && r.sync!=='conflict');
     const pIds=new Set(pending.map(r=>r.id).filter(Boolean)), pRows=new Set(pending.filter(r=>!r.id||r.sync!=='add').map(r=>r.row).filter(Boolean));
     const old=new Map(S.rides.filter(r=>r.id).map(r=>[r.id,r]));
     const remote=j.rides.filter(r=>!(r.id && pIds.has(r.id)) && !pRows.has(r.row)).map(r=>{
@@ -611,14 +614,14 @@ async function pull(){
     toast(`Pobrano ${remote.length} przejazdów z arkusza`);
   }catch(e){ toast('Nie udało się pobrać: '+e.message); }
 }
-function sortRides(){ S.rides.sort((a,b)=> (b.date+b.dep).localeCompare(a.date+a.dep)); }
+function sortRides(){ S.rides.sort((a,b)=> (b.date||'').localeCompare(a.date||'') || (b.row&&a.row ? b.row-a.row : 0) || (b.dep||'').localeCompare(a.dep||'')); }
 const rkey = r => r.id || ('r'+r.row);
 function visibleRides(){ return S.rides.filter(r=>r.sync!=='delete'); }
 
 /* ---------------- widok: przejazd ---------------- */
 let tick=null;
 function renderChips(){
-  const pend=S.rides.filter(r=>r.sync && r.sync!=='ok').length;
+  const pend=S.rides.filter(r=>r.sync && r.sync!=='ok' && r.sync!=='conflict').length;
   const rt=G.rt; const rtAge=rt.at? Math.round((Date.now()-rt.at)/1000):null;
   const rtC = rt.status==='ok' ? `<span class="chip" title="${esc(rt.src)}"><i class="dot ok"></i>RT · ${esc(rt.src)}</span>`
     : rt.status==='err' ? `<span class="chip" title="${esc(rt.msg)}"><i class="dot err"></i>RT niedostępny</span>` : `<span class="chip"><i class="dot"></i>RT</span>`;
@@ -641,7 +644,7 @@ function renderRide(){
       <div class="timer num" id="timer">0:00</div>
       <div class="route"><span class="pin"></span><div><b>${esc(a.from||'—')}</b><div class="small faint num">${esc(a.dep)}</div></div>
         <span class="bar"></span><span></span><span class="pin end"></span><div class="faint">przystanek końcowy ustalę z GPS</div></div>
-      <div class="meta">${a.vehicle?`<span class="chip">🚋 ${esc(a.vehicle)}</span>`:''}${a.brigade?`<span class="chip">brygada ${esc(a.brigade)}</span>`:''}</div>
+      <div class="meta">${a.vehicle?`<span class="chip">${vIcon(a.line,a.mode)} ${esc(a.vehicle)}</span>`:''}${a.brigade?`<span class="chip">brygada ${esc(a.brigade)}</span>`:''}</div>
     </div>
     <div class="card" style="padding:4px 16px 16px;margin-top:12px" id="active-notes">${notesHtml(a.notes, m).replace('<label>Uwagi</label>','<label>Zdarzenia w trakcie jazdy</label>')}</div>
     <button class="go end" id="b-end"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>Zakończ przejazd</button>
@@ -692,7 +695,7 @@ function sugHtml(list, selObj){
   if(!list.length) return '';
   return list.slice(0,8).map((s,i)=>{
     const k=String(i); const right = s.src==='gps' ? `<span class="src gps">${s.d} m</span>` : s.src==='tu' ? `<span class="src tu">${s.eta>=0?'za '+s.eta+' min':(-s.eta)+' min temu'}</span>` : `<span class="src st">${esc(s.sched)}</span>`;
-    const det=[s.vehicle&&('🚋 '+s.vehicle), s.brigade&&('bryg. '+s.brigade), s.src==='st'&&'rozkład', s.atStop&&'na przystanku'].filter(Boolean).join(' · ');
+    const det=[s.vehicle&&(vIcon(s.line,s.mode)+' '+s.vehicle), s.brigade&&('bryg. '+s.brigade), s.src==='st'&&'rozkład', s.atStop&&'na przystanku'].filter(Boolean).join(' · ');
     return `<button type="button" class="sug ${selObj===s?'sel':''}" data-sug="${k}"><span class="badge ${badgeCls(s.line,s.mode)}">${esc(s.line||'?')}</span>
       <span><div class="h">${s.headsign?'→ '+esc(s.headsign):esc(s.tripId||'kurs')}</div><div class="d">${esc(det)||'&nbsp;'}</div></span>${right}</button>`; }).join('');
 }
@@ -765,7 +768,7 @@ function bindStart(ctx){
     if(parseTime(d.dep)==null) return toast('Podaj godzinę w formacie hh:mm:ss');
     if(!d.line && !confirm('Nie podano linii. Rozpocząć mimo to?')) return;
     d.mode = d.mode && ctx.sel!=null ? d.mode : modeOf(d.line);
-    S.active={...d}; save(); closeSheet(); renderRide(); toast('Miłej podróży 🚋'); };
+    S.active={...d}; save(); closeSheet(); renderRide(); toast('Miłej podróży '+vIcon(d.line,d.mode)); };
 }
 
 /* ---------- KONIEC ---------- */
@@ -844,7 +847,7 @@ function openEdit(r, isActive){
   const updDur=()=>{ const e=$('#f-dur'); if(e) e.value=fmtDur(durSec({dep:normTimeInput($('#f-dep').value), arr:normTimeInput($('#f-arr')?.value)})); };
   $('#f-dep').oninput=updDur; if($('#f-arr')) $('#f-arr').oninput=updDur;
   const del=$('#b-del'); if(del) del.onclick=()=>{ if(!confirm('Usunąć ten przejazd (także z arkusza)?')) return;
-    if(r.sync==='add'){ S.rides=S.rides.filter(x=>x!==r); } else { if(!r.id) r.orig=r.orig||{date:r.date,dep:r.dep}; r.sync='delete'; }
+    if(r.sync==='add'){ S.rides=S.rides.filter(x=>x!==r); } else { if(!r.id) r.orig=r.orig||{date:r.dateRaw??r.date, dep:r.dep}; r.sync='delete'; }
     save(); closeSheet(); renderAll(); sync(true); };
   $('#b-ok').onclick=()=>{ readDraft(ctx); const n=ctx.draft;
     if(!n.date) return toast('Podaj datę'); if(parseTime(n.dep)==null) return toast('Godzina odjazdu: hh:mm:ss');
@@ -853,7 +856,8 @@ function openEdit(r, isActive){
     if(isActive){ S.active=n; save(); closeSheet(); renderRide(); return; }
     if(!S.rides.includes(r)){ n.id=n.id||uid(); n.sync='add'; S.rides.unshift(n); }
     else { const i=S.rides.indexOf(r);
-      if(r.sync==='ok'){ if(!r.id){ n.orig={date:r.date, dep:r.dep}; n.id=uid(); } n.sync='update'; }
+      if(r.sync==='ok'||r.sync==='conflict'){ if(!r.id){ n.orig={date:r.dateRaw??r.date, dep:r.dep}; n.id=uid(); } n.sync='update'; }
+      n.keepDateEmpty = r.dateRaw==='' && n.date===r.date; if(n.date!==r.date) n.dateSrc='';
       S.rides[i]=n; }
     sortRides(); save(); closeSheet(); renderAll(); toast('Zapisano'); sync(true); };
 }
@@ -862,7 +866,7 @@ function openEdit(r, isActive){
 let histLimit=120;
 function rideCard(r){
   const d=durSec(r);
-  const sub=[r.dep&&r.dep, r.vehicle&&('🚋 '+r.vehicle), r.brigade&&('bryg. '+r.brigade), r.notes&&('📝 '+r.notes)].filter(Boolean).join(' · ');
+  const sub=[r.dep&&r.dep, r.vehicle&&(vIcon(r.line,r.mode)+' '+r.vehicle), r.brigade&&('bryg. '+r.brigade), r.notes&&('📝 '+r.notes), r.dateSrc==='guess'&&'≈ data wyliczona', r.sync==='conflict'&&'⚠ konflikt z arkuszem'].filter(Boolean).join(' · ');
   return `<div class="card ride" data-k="${esc(rkey(r))}"><span class="badge ${badgeCls(r.line,r.mode)}">${esc(r.line||'?')}</span>
     <div style="min-width:0"><div class="stops">${esc(r.from||'—')}<i>→</i>${esc(r.to||'—')}</div><div class="sub num">${esc(sub)}${r.sync&&r.sync!=='ok'?'<span class="pend" title="czeka na wysłanie"></span>':''}</div></div>
     <div class="dur num">${fmtDur(d)}<small>${esc(r.arr? r.arr.slice(0,5):'')}</small></div></div>`;
