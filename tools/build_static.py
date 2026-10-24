@@ -90,6 +90,8 @@ def main():
     trips_out = {}
     dep = {d: {} for d in days[1:]}
     feeds_ok = []
+    shapes_all = {}   # "feed:shape_id" -> [[lat, lon], ...]
+    trip_shape = {}   # "feed:trip_id" -> "feed:shape_id"
     sched = {}   # route_key -> {"stops": [...], "si": {stop: idx}, "trips": {tid: {...}}, "act": {date: set(service)}}
 
     def ridx(rid):
@@ -139,6 +141,8 @@ def main():
             block = (r.get("block_id") or "").strip() or block_from_trip_id(tid)
             hs = (r.get("trip_headsign") or "").strip()
             trip_info[tid] = (rid, hs, r.get("service_id"))
+            if (r.get("shape_id") or "").strip():
+                trip_shape[f"{feed}:{tid}"] = f"{feed}:{r['shape_id'].strip()}"
             trips_out[f"{feed}:{tid}"] = [ridx(rid), hidx(hs), block]
 
         act = {d: active_services(z, d) for d in days}
@@ -180,6 +184,21 @@ def main():
                 elif d in dep:
                     dep[d].setdefault(sk, {}).setdefault(key, []).append(m)
 
+        # geometria tras (shapes.txt) – tylko kształty używane przez kursy z okna dat
+        need = {trip_shape.get(f"{feed}:{tid}") for sc in sched.values() for tid in sc["trips"]} - {None}
+        pts = {}
+        for r in read_csv(z, "shapes.txt"):
+            k = f"{feed}:{r['shape_id']}"
+            if k not in need:
+                continue
+            try:
+                pts.setdefault(k, []).append((int(r.get("shape_pt_sequence") or 0), round(float(r["shape_pt_lat"]), 5), round(float(r["shape_pt_lon"]), 5)))
+            except (KeyError, ValueError):
+                pass
+        for k, v in pts.items():
+            v.sort()
+            shapes_all[k] = [[x[1], x[2]] for x in v]
+
     if not feeds_ok:
         sys.exit("Nie udało się wczytać żadnego GTFS")
 
@@ -193,11 +212,15 @@ def main():
     for f in os.listdir(sdir):
         os.remove(os.path.join(sdir, f))
     for rk, sc in sched.items():
-        trips = {}
+        trips, shp = {}, {}
+        feed = rk.split(":")[0]
         for tid, tr in sc["trips"].items():
             tr["t"].sort()
-            trips[tid] = [tr["s"], tr["h"], [[x[1], x[2], x[3]] for x in tr["t"]]]
-        json.dump({"route": rk, "stops": sc["stops"], "act": {k: sorted(v) for k, v in sc["act"].items()}, "trips": trips},
+            sk = trip_shape.get(f"{feed}:{tid}")
+            if sk in shapes_all:
+                shp[sk] = shapes_all[sk]
+            trips[tid] = [tr["s"], tr["h"], [[x[1], x[2], x[3]] for x in tr["t"]], sk if sk in shapes_all else ""]
+        json.dump({"route": rk, "stops": sc["stops"], "act": {k: sorted(v) for k, v in sc["act"].items()}, "trips": trips, "shapes": shp},
                   open(os.path.join(sdir, safe_name(rk) + ".json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     files = []
     for d, st in dep.items():
