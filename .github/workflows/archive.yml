@@ -19,7 +19,7 @@ jobs:
       - name: Pobierz dawne wersje GTFS i zbuduj archiwum przebiegów
         env:
           TRANSITLAND_API_KEY: ${{ secrets.TRANSITLAND_API_KEY }}
-        run: python3 tools/archive.py backfill --since "${{ inputs.since }}" --step-days "${{ inputs.step_days }}"
+        run: python3 tools/archive.py backfill --gql --since "${{ inputs.since }}" --step-days "${{ inputs.step_days }}"
       - name: Commit
         if: always()
         run: |
