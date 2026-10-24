@@ -140,7 +140,7 @@ def main():
             rid = f"{feed}:{r['route_id']}"
             block = (r.get("block_id") or "").strip() or block_from_trip_id(tid)
             hs = (r.get("trip_headsign") or "").strip()
-            trip_info[tid] = (rid, hs, r.get("service_id"))
+            trip_info[tid] = (rid, hs, r.get("service_id"), block)
             if (r.get("shape_id") or "").strip():
                 trip_shape[f"{feed}:{tid}"] = f"{feed}:{r['shape_id'].strip()}"
             trips_out[f"{feed}:{tid}"] = [ridx(rid), hidx(hs), block]
@@ -157,7 +157,7 @@ def main():
                 sk0 = f"{feed}:{r['stop_id']}"
                 if sk0 not in sc["si"]:
                     sc["si"][sk0] = len(sc["stops"]); sc["stops"].append(sk0)
-                tr = sc["trips"].setdefault(r["trip_id"], {"s": ti[2], "h": ti[1], "t": []})
+                tr = sc["trips"].setdefault(r["trip_id"], {"s": ti[2], "h": ti[1], "t": [], "b": ti[3]})
                 a_s = hms_to_sec(r.get("arrival_time") or r.get("departure_time"))
                 d_s = hms_to_sec(r.get("departure_time") or r.get("arrival_time"))
                 try:
@@ -172,7 +172,7 @@ def main():
             m = hms_to_min(r.get("departure_time") or r.get("arrival_time"))
             if m is None:
                 continue
-            rid, hs, sid = ti
+            rid, hs, sid = ti[:3]
             key = f"{ridx(rid)}|{hidx(hs)}"
             sk = f"{feed}:{r['stop_id']}"
             for i, d in enumerate(days):
@@ -219,7 +219,7 @@ def main():
             sk = trip_shape.get(f"{feed}:{tid}")
             if sk in shapes_all:
                 shp[sk] = shapes_all[sk]
-            trips[tid] = [tr["s"], tr["h"], [[x[1], x[2], x[3]] for x in tr["t"]], sk if sk in shapes_all else ""]
+            trips[tid] = [tr["s"], tr["h"], [[x[1], x[2], x[3]] for x in tr["t"]], sk if sk in shapes_all else "", tr["b"]]
         json.dump({"route": rk, "stops": sc["stops"], "act": {k: sorted(v) for k, v in sc["act"].items()}, "trips": trips, "shapes": shp},
                   open(os.path.join(sdir, safe_name(rk) + ".json"), "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     files = []
