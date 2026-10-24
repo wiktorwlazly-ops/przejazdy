@@ -1,5 +1,5 @@
 {
-"generated": "2026-10-24T12:56:40",
+"generated": "2026-10-24T13:02:29",
 "lines": {},
 "sources": [
 {
@@ -43,6 +43,48 @@
 "fetched": "2024-07-12",
 "ok": false,
 "error": "HTTP 401 https://transit.land/api/v2/rest/feed_versions/8b4e991d5c1b8b88e219f90a3185a8a0acdb36b0/download :: {\"error\":\"Unauthorized\"}"
+},
+{
+"feed": "T",
+"sha1": "00d24016d1423629faf89cd4fef66956dec7ed79",
+"fetched": "2024-06-24",
+"ok": false,
+"error": "HTTP 401 GraphQL :: {\"error\":\"Unauthorized\"}"
+},
+{
+"feed": "T",
+"sha1": "c4c270caba22132e4623357c18f7d11eba393f66",
+"fetched": "2024-07-02",
+"ok": false,
+"error": "HTTP 401 GraphQL :: {\"error\":\"Unauthorized\"}"
+},
+{
+"feed": "T",
+"sha1": "a03b458efdca6b9697df3666ee114db40c14e9ef",
+"fetched": "2024-07-09",
+"ok": false,
+"error": "HTTP 401 GraphQL :: {\"error\":\"Unauthorized\"}"
+},
+{
+"feed": "A",
+"sha1": "ba066b91aad9f5b73b89948cb45e77f76dab7506",
+"fetched": "2024-06-26",
+"ok": false,
+"error": "HTTP 401 GraphQL :: {\"error\":\"Unauthorized\"}"
+},
+{
+"feed": "A",
+"sha1": "e457d531d469d69194e9bf501042721e490f402e",
+"fetched": "2024-07-03",
+"ok": false,
+"error": "HTTP 401 GraphQL :: {\"error\":\"Unauthorized\"}"
+},
+{
+"feed": "A",
+"sha1": "8b4e991d5c1b8b88e219f90a3185a8a0acdb36b0",
+"fetched": "2024-07-12",
+"ok": false,
+"error": "HTTP 401 GraphQL :: {\"error\":\"Unauthorized\"}"
 }
 ]
 }
