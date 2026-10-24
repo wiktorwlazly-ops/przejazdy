@@ -228,6 +228,107 @@ def tl_get(url, key, binary=False, tries=3):
             raise RuntimeError(f"{e} {url.split('?')[0]}")
 
 
+# ---- GraphQL: zawartość wersji bez pobierania pliku (gdy licencja nie pozwala na /download) ----
+TL_GQL = "https://transit.land/api/v2/query"
+GQL_ROUTES = """
+query($sha1: String!, $after: Int, $d1: Date, $d2: Date) {
+  routes(after: $after, limit: 25, where: {feed_version_sha1: $sha1}) {
+    id
+    route_short_name
+    route_long_name
+    a: trips(limit: 2000, where: {service_date: $d1}) { stop_pattern_id }
+    b: trips(limit: 2000, where: {service_date: $d2}) { stop_pattern_id }
+    patterns {
+      stop_pattern_id
+      trips(limit: 1) {
+        shape { geometry }
+        stop_times { stop_sequence stop { stop_name stop_code geometry } }
+      }
+    }
+  }
+}"""
+GQL_INTROSPECT = """
+query { __schema { types { name fields { name args { name } } inputFields { name } } } }"""
+
+
+def tl_gql(query, variables, key, tries=3):
+    body = json.dumps({"query": query, "variables": variables}).encode()
+    for i in range(tries):
+        req = urllib.request.Request(TL_GQL, data=body, headers={"apikey": key, "Content-Type": "application/json", "User-Agent": "przejazdy-archive"})
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                j = json.loads(r.read())
+            if j.get("errors"):
+                raise RuntimeError("GraphQL: " + "; ".join(e.get("message", "") for e in j["errors"])[:600])
+            return j["data"]
+        except urllib.error.HTTPError as e:
+            txt = e.read()[:400].decode("utf-8", "replace")
+            if e.code in (429, 500, 502, 503, 504) and i < tries - 1:
+                time.sleep(15 * (i + 1)); continue
+            raise RuntimeError(f"HTTP {e.code} GraphQL :: {txt}")
+        except urllib.error.URLError as e:
+            if i < tries - 1:
+                time.sleep(5); continue
+            raise
+
+
+def log_schema(key):
+    """Przy błędzie zapytania – wypisz pola typów, żeby można było poprawić zapytanie."""
+    try:
+        d = tl_gql(GQL_INTROSPECT, {}, key)
+        want = {"Route", "RouteStopPattern", "Trip", "StopTime", "Stop", "Shape", "TripFilter", "RouteFilter", "Query"}
+        for t in d["__schema"]["types"]:
+            if t["name"] in want:
+                f = [x["name"] + ("(" + ",".join(a["name"] for a in x["args"]) + ")" if x.get("args") else "") for x in (t.get("fields") or [])]
+                inf = [x["name"] for x in (t.get("inputFields") or [])]
+                log(f"  [schemat] {t['name']}: {', '.join((f or inf)[:60])}")
+    except Exception as e:
+        log("  [schemat] nie udało się odczytać:", e)
+
+
+def lonlat(g):
+    c = (g or {}).get("coordinates") or []
+    return (round(c[1], 5), round(c[0], 5)) if len(c) >= 2 else None
+
+
+def patterns_via_gql(sha, d_from, key):
+    """Ten sam wynik co extract_patterns(), ale z API zapytań Transitland."""
+    d1 = date.fromisoformat(d_from)
+    d2 = d1 + timedelta(days=(5 - d1.weekday()) % 7 or 7)      # najbliższa sobota → warianty weekendowe
+    out, after = {}, None
+    while True:
+        data = tl_gql(GQL_ROUTES, {"sha1": sha, "after": after, "d1": d1.isoformat(), "d2": d2.isoformat()}, key)
+        routes = data.get("routes") or []
+        for r in routes:
+            line = (r.get("route_short_name") or r.get("route_long_name") or str(r["id"])).strip()
+            active = {t["stop_pattern_id"] for t in (r.get("a") or []) + (r.get("b") or [])}
+            for p in (r.get("patterns") or []):
+                if active and p["stop_pattern_id"] not in active:
+                    continue
+                if not active:
+                    continue                                   # linia nie kursowała w próbkowanych dniach
+                tr = (p.get("trips") or [None])[0]
+                if not tr:
+                    continue
+                sts = sorted(tr.get("stop_times") or [], key=lambda x: x.get("stop_sequence") or 0)
+                st = []
+                for x in sts:
+                    s0 = x.get("stop") or {}; ll = lonlat(s0.get("geometry"))
+                    if ll:
+                        st.append([(s0.get("stop_name") or "").strip(), post_of(s0.get("stop_code")), ll[0], ll[1]])
+                if len(st) < 2:
+                    continue
+                g = ((tr.get("shape") or {}).get("geometry") or {}).get("coordinates") or []
+                sh = enc_poly([(c[1], c[0]) for c in g if len(c) >= 2]) if g else ""
+                k = hashlib.sha1(json.dumps([st, sh], ensure_ascii=False).encode()).hexdigest()[:16]
+                out.setdefault(line, {})[k] = {"stops": st, "shape": sh}
+        if len(routes) < 25:
+            break
+        after = routes[-1]["id"]
+        time.sleep(0.5)
+    return out
+
+
 def tl_versions(feed, key):
     out, url = [], f"{TL}/feed_versions?feed_onestop_id={feed}&limit=100"
     while url:
@@ -274,23 +375,38 @@ def backfill(a):
         if before and (not picked or picked[0][0] > since.isoformat()):
             picked.insert(0, before[-1])
         log(f"  do pobrania (co ~{a.step_days} dni): {len(picked)} wersji")
-        ok = 0
+        ok = 0; use_gql = a.gql
         for k, (f, v) in enumerate(picked):
             d_from = max(f, since.isoformat()) if k == 0 else f
             d_to = (date.fromisoformat(picked[k + 1][0]) - timedelta(days=1)).isoformat() if k + 1 < len(picked) else until.isoformat()
             sha = v.get("sha1")
             try:
-                zb = tl_get(f"{TL}/feed_versions/{sha}/download", key, binary=True)
-                if zb[:2] != b"PK":
-                    raise RuntimeError("odpowiedź nie jest plikiem ZIP: " + zb[:200].decode("utf-8", "replace"))
-                pats = extract_patterns(zb, feed, d_from, d_to)
+                how = ""
+                if not use_gql:
+                    try:
+                        zb = tl_get(f"{TL}/feed_versions/{sha}/download", key, binary=True)
+                        if zb[:2] != b"PK":
+                            raise RuntimeError("odpowiedź nie jest plikiem ZIP")
+                        pats = extract_patterns(zb, feed, d_from, d_to); how = f"{len(zb)//1024} kB"
+                    except RuntimeError as e:
+                        if "401" in str(e) or "403" in str(e):
+                            log("  pobieranie plików niedozwolone – przechodzę na API zapytań (GraphQL)")
+                            use_gql = True
+                        else:
+                            raise
+                if use_gql:
+                    pats = patterns_via_gql(sha, d_from, key); how = "GraphQL"
                 n = merge(arc, SYS[feed], pats, d_from, d_to)
                 ok += 1
-                log(f"  {f} {sha[:10]}  {len(zb)//1024} kB  linii {len(pats)}  nowych wariantów {n}  ważność {d_from}…{d_to}")
+                log(f"  {f} {sha[:10]}  {how}  linii {len(pats)}  nowych wariantów {n}  ważność {d_from}…{d_to}")
+                if ok % 10 == 0:
+                    save_archive(arc, [])
                 meta.append({"feed": feed, "sha1": sha, "fetched": f, "from": d_from, "to": d_to, "ok": True})
             except Exception as e:
                 log(f"  {f} {sha[:10] if sha else '?'}  BŁĄD: {e}")
                 meta.append({"feed": feed, "sha1": sha, "fetched": f, "ok": False, "error": str(e)[:200]})
+                if ok == 0 and k == 0 and "GraphQL" in str(e):
+                    log_schema(key)
                 if ok == 0 and k >= 2:
                     log("  przerywam ten kanał – pierwsze pobrania się nie udają (prawdopodobnie brak zgody na pobieranie lub zły klucz)")
                     break
@@ -337,6 +453,7 @@ if __name__ == "__main__":
     sp = ap.add_subparsers(dest="cmd", required=True)
     b = sp.add_parser("backfill"); b.add_argument("--since", default="2024-07-01"); b.add_argument("--until", default="")
     b.add_argument("--step-days", type=int, default=7)
+    b.add_argument("--gql", action="store_true", help="od razu przez API zapytań (bez prób pobierania plików)")
     u = sp.add_parser("update"); u.add_argument("--zip", action="append", default=[])
     l = sp.add_parser("local"); l.add_argument("--zip", action="append", default=[]); l.add_argument("--to", default="")
     a = ap.parse_args()
