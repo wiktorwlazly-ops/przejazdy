@@ -293,6 +293,8 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
       <div class="hint" id="s-static-info"></div>
       <div class="inl" style="margin-top:12px"><button class="btn sm" id="b-diag">Diagnostyka GTFS-RT w pobliżu</button></div>
       <div class="inl" style="margin-top:8px"><button class="btn sm" id="b-backfill">Uzupełnij rozkład dla ostatnich przejazdów</button></div>
+      <div class="inl" style="margin-top:8px"><button class="btn sm" id="b-arch">Odtwórz trasy dawnych przejazdów z archiwum</button></div>
+      <div class="hint" id="arch-info">Zapisuje do karty TRASY_KRAKOW trasy przejazdów, które jeszcze ich nie mają – wg wariantu linii obowiązującego w dniu przejazdu.</div>
       <div class="hint" id="backfill-info">Dopasowuje do rozkładu przejazdy z wczoraj i dziś, które nie mają jeszcze godzin rozkładowych.</div>
       <div id="diag"></div>
     </div>
@@ -1278,6 +1280,7 @@ function bindSet(){
     S.rides=[]; S.active=null; S.lastPull=0; save(); renderAll(); };
   $('#b-diag').onclick=diag;
   $('#b-backfill').onclick=backfill;
+  $('#b-arch').onclick=restoreRoutes;
 }
 function applyTheme(){ const t=S.settings.theme; if(t) document.documentElement.dataset.theme=t; else delete document.documentElement.dataset.theme; }
 function exportCsv(){
@@ -1302,6 +1305,38 @@ async function backfill(){
   }
   save(); btn.disabled=false; info.textContent=`Uzupełniono ${ok} z ${todo.length} przejazdów.${ok<todo.length?' Pozostałych nie udało się dopasować do kursu – możesz je wpisać ręcznie w edycji.':''}`;
   renderChips(); sync();
+}
+async function restoreRoutes(){
+  const info=$('#arch-info'), btn=$('#b-arch'); const st=S.settings;
+  if(!st.backend) return toast('Najpierw podaj adres Apps Script');
+  const todo=visibleRides().filter(r=>!r.route && r.from && r.to && r.line && r.date);
+  if(!todo.length){ info.textContent='Wszystkie przejazdy z przystankami mają już zapisane trasy.'; return; }
+  btn.disabled=true; if(!G.ok) await loadStatic();
+  const found=[]; let miss=0;
+  for(const [i,r] of todo.entries()){
+    if(i%25===0) info.textContent=`Wyznaczam trasy ${i+1}/${todo.length}…`;
+    const ag=await archiveGeom(r).catch(()=>null);
+    if(!ag){ miss++; continue; }
+    const ln=ag.line.filter((p,k,a)=>k===0||Math.abs(p[0]-a[k-1][0])>1e-6||Math.abs(p[1]-a[k-1][1])>1e-6);
+    found.push({ r, route:{ sys:ag.sys, src:ag.src, via:[], poly:polyEncode(ln), ver:ag.ver } });
+  }
+  // przejazdy czekające na wysłanie – trasa pojedzie zwykłą synchronizacją
+  const pend=found.filter(x=>x.r.sync!=='ok'); pend.forEach(x=>{ x.r.route=x.route; if(!x.r.id){ x.r.id=uid(); x.r.orig=x.r.orig||{date:x.r.dateRaw??x.r.date, dep:x.r.dep}; } });
+  const bulk=found.filter(x=>x.r.sync==='ok'); let saved=0, failed=0;
+  for(let k=0;k<bulk.length;k+=150){
+    const chunk=bulk.slice(k,k+150);
+    info.textContent=`Zapisuję w arkuszu ${Math.min(k+150,bulk.length)}/${bulk.length}…`;
+    const items=chunk.map(({r,route})=>{ const id=r.id||uid(); return { _r:r, id, row:r.row, orig:{date:r.dateRaw??r.date, dep:r.dep}, date:r.date, line:r.line, from:r.from, to:r.to, route }; });
+    try{
+      const res=await post({action:'routes_bulk', items:items.map(({_r,...x})=>x)});
+      if(!res.ok) throw new Error(res.error||'błąd');
+      const okIds=new Set(res.results.filter(x=>x.ok).map(x=>x.id));
+      for(const it of items){ if(okIds.has(it.id)){ it._r.id=it.id; it._r.route=it.route; saved++; } else failed++; }
+      save();
+    }catch(e){ info.textContent='Przerwano: '+e.message+` (zapisano ${saved})`; btn.disabled=false; return; }
+  }
+  MAPSTATE.geo={}; save(); sync(true); btn.disabled=false;
+  info.textContent=`Zapisano trasy: ${saved}${pend.length?` (+${pend.length} z najbliższą synchronizacją)`:''}. Bez trasy w archiwum: ${miss}${failed?`, niedopasowane do wiersza arkusza: ${failed} – pobierz historię ponownie i powtórz`:''}.`;
 }
 async function diag(){
   const el=$('#diag'); el.innerHTML='<div class="status"><i class="spin"></i> pobieram GTFS-RT i pozycję…</div>';
@@ -1410,19 +1445,78 @@ async function computeRoute(r, via){
 async function attachRoute(r, via){
   try{
     if(!G.ok) await loadStatic();
-    const g=await computeRoute(r, via ?? r.route?.via ?? []); if(!g) return null;
+    via = via ?? r.route?.via ?? [];
+    let g=null;
+    if(!via.length && r.date && r.date < fmtDate(new Date(Date.now()-2*864e5))){   // dawny przejazd → wariant z archiwum
+      const ag=await archiveGeom(r); if(ag) g={ line:ag.line, src:ag.src, via:[], sys:ag.sys, ver:ag.ver };
+    }
+    if(!g) g=await computeRoute(r, via); if(!g) return null;
     if(!r.id){ r.orig=r.orig||{date:r.dateRaw??r.date, dep:r.dep}; r.id=uid(); r.keepDateEmpty = r.dateRaw===''; }
     const ln=g.line.filter((p,k,arr)=>k===0 || Math.abs(p[0]-arr[k-1][0])>1e-6 || Math.abs(p[1]-arr[k-1][1])>1e-6);
-    r.route={ sys:g.sys, src:g.src, via:g.via, poly:polyEncode(ln), ver:gtfsVer() };
+    r.route={ sys:g.sys, src:g.src, via:g.via, poly:polyEncode(ln), ver:g.ver||gtfsVer() };
     if(r.sync==='ok'||r.sync==='conflict') r.sync='update';
     MAPSTATE.geo={}; return r.route;
   }catch(e){ console.warn('trasa', e); return null; }
 }
-const SRC_LABEL={ 'gtfs':'GTFS', 'gtfs-petla':'GTFS (przez pętlę)', 'gtfs-inna-linia':'GTFS (po trasie innej linii)', 'reczna':'korekta ręczna', 'prosta':'linia prosta – brak w GTFS' };
+/* ---- archiwum przebiegów (data/archive) – trasy wg rozkładu obowiązującego w dniu przejazdu ---- */
+const ARCH={}, ARCHP={};
+function loadArchive(sys, line){
+  const k=sys+'_'+String(line).replace(/[^A-Za-z0-9_-]/g,'_');
+  if(k in ARCH) return Promise.resolve(ARCH[k]);
+  if(!ARCHP[k]) ARCHP[k]=fetchT(S.settings.dataUrl.replace(/\/?$/,'/')+'archive/'+k+'.json',{},15000).then(r=>r.ok?r.json():null).catch(()=>null)
+    .then(j=>{ ARCH[k]=j; delete ARCHP[k]; return j; });
+  return ARCHP[k];
+}
+function archSystems(r){
+  const g=groupOfPrefix(String(r.vehicle||'').trim().toUpperCase().match(/^[A-Z]+/)?.[0]||'');
+  if(g) return ['ZTP-'+g];
+  return modeOf(r.line, r.mode)==='T' ? ['ZTP-T'] : ['ZTP-A','ZTP-M'];
+}
+function stopMatcher(label){
+  const l=String(label||'').trim(); const m=l.match(/^(.*\S)\s+(\d{2})$/);
+  return st => st[0]===l || (m && st[0]===m[1] && st[1]===m[2]);
+}
+function archValid(p, D, slack){ return p.ranges.some(([a,b])=> D>=a && D<=b) ? 0 :
+  (slack ? Math.min(...p.ranges.map(([a,b])=>Math.abs(new Date((D<a?a:b)+'T12:00')-new Date(D+'T12:00'))/864e5)) : Infinity); }
+function archSeg(p, i, j){
+  const pts=p.stops.slice(i, j+1).map(s=>[s[2],s[3]]);
+  if(p.shape && pts.length>=2){ const shape=polyDecode(p.shape); let ia=0, ib=0, bd=1e9;
+    shape.forEach((q,k)=>{ const d=d2(q,pts[0]); if(d<bd){ bd=d; ia=k; } }); bd=1e9;
+    for(let k=ia;k<shape.length;k++){ const d=d2(shape[k],pts[pts.length-1]); if(d<bd){ bd=d; ib=k; } }
+    if(ib>ia) return [pts[0], ...shape.slice(ia, ib+1), pts[pts.length-1]]; }
+  return pts;
+}
+/** Trasa z archiwum: wariant linii ważny w dniu przejazdu (lub najbliższy w ciągu 21 dni), także przez pętlę. */
+async function archiveGeom(r){
+  if(!r.date || !r.from || !r.to || !r.line) return null;
+  const isA=stopMatcher(r.from), isB=stopMatcher(r.to);
+  for(const sys of archSystems(r)){
+    const arc=await loadArchive(sys, r.line); if(!arc) continue;
+    for(const slack of [false, true]){
+      const cand=arc.patterns.map(p=>({p, dist:archValid(p, r.date, slack)})).filter(x=>x.dist<=21);
+      if(!cand.length) continue;
+      const minD=Math.min(...cand.map(x=>x.dist)); const ps=cand.filter(x=>x.dist===minD).map(x=>x.p);
+      let best=null;
+      for(const p of ps){ for(let i=0;i<p.stops.length;i++){ if(!isA(p.stops[i])) continue;
+        for(let j=i+1;j<p.stops.length;j++) if(isB(p.stops[j])){ if(!best||j-i<best.cost) best={cost:j-i, parts:[[p,i,j]]}; break; } } }
+      if(!best){ for(const p of ps){ const i=p.stops.findIndex(isA); if(i<0) continue; const term=p.stops[p.stops.length-1][0];
+          for(const q of ps){ if(q===p || q.stops[0][0]!==term) continue; const j=q.stops.findIndex((x,k)=>k>0&&isB(x)); if(j<0) continue;
+            const cost=(p.stops.length-1-i)+j; if(!best||cost<best.cost) best={cost, parts:[[p,i,p.stops.length-1],[q,0,j]], loop:true}; } } }
+      if(!best) continue;
+      const line=[]; for(const [p,i,j] of best.parts){ const sg=archSeg(p,i,j); line.push(...(line.length? sg.slice(1) : sg)); }
+      const rng=best.parts[0][0].ranges.find(([a,b])=>r.date>=a&&r.date<=b) || best.parts[0][0].ranges[0];
+      return { line, src: best.loop? 'gtfs-archiwum-petla' : 'gtfs-archiwum', sys, ver: rng? rng[0] : '' };
+    }
+  }
+  return null;
+}
+const SRC_LABEL={ 'gtfs-archiwum':'archiwum GTFS', 'gtfs-archiwum-petla':'archiwum GTFS (przez pętlę)', 'gtfs':'GTFS', 'gtfs-petla':'GTFS (przez pętlę)', 'gtfs-inna-linia':'GTFS (po trasie innej linii)', 'reczna':'korekta ręczna', 'prosta':'linia prosta – brak w GTFS' };
 /** Geometria do mapy: zapisana trasa, a gdy jej brak – wyliczona z bieżącego rozkładu (bez zapisu). */
 async function rideGeometry(r){
   if(r.route?.poly){ const line=polyDecode(r.route.poly); if(line.length>1) return { line, a:line[0], b:line[line.length-1], exact:r.route.src!=='prosta', saved:true, src:r.route.src, ver:r.route.ver }; }
-  const key=[r.line,r.from,r.to].join('|'); if(key in MAPSTATE.geo) return MAPSTATE.geo[key];
+  const key=[r.line,r.from,r.to,r.date].join('|'); if(key in MAPSTATE.geo) return MAPSTATE.geo[key];
+  const ag=await archiveGeom(r).catch(()=>null);
+  if(ag){ const o={ line:ag.line, a:ag.line[0], b:ag.line[ag.line.length-1], exact:true, saved:false, src:ag.src, ver:ag.ver }; MAPSTATE.geo[key]=o; return o; }
   const g=await computeRoute(r, []);
   const out = g ? { line:g.line, a:g.line[0], b:g.line[g.line.length-1], exact:g.exact, saved:false, src:g.src } : null;
   MAPSTATE.geo[key]=out; return out;
@@ -1472,7 +1566,7 @@ async function renderMap(){
   const bounds=[]; const focusB=[]; let missing=0; const stopLbl=new Map();
   rides.forEach((r,i)=>{ const g=geos[i]; if(!g){ missing++; return; }
     const isF = MAPSTATE.focus===rkey(r), dim = MAPSTATE.focus && !isF; const col=rideColor(r);
-    const tip=`<b>${esc(r.line||'?')}</b> ${esc(r.from)} → ${esc(r.to)}<br>${esc((r.dep||'').slice(0,5))}–${esc((r.arr||'').slice(0,5))} · ${fmtDur(durSec(r))}${r.vehicle?' · '+esc(r.vehicle):''}<br><span style="color:var(--ink3)">trasa: ${g.saved? 'zapisana · '+esc(SRC_LABEL[g.src]||g.src)+(g.ver?' · GTFS '+esc(g.ver):'') : 'wg bieżącego rozkładu (niezapisana)'}</span>`;
+    const tip=`<b>${esc(r.line||'?')}</b> ${esc(r.from)} → ${esc(r.to)}<br>${esc((r.dep||'').slice(0,5))}–${esc((r.arr||'').slice(0,5))} · ${fmtDur(durSec(r))}${r.vehicle?' · '+esc(r.vehicle):''}<br><span style="color:var(--ink3)">trasa: ${g.saved? 'zapisana · '+esc(SRC_LABEL[g.src]||g.src)+(g.ver?' · GTFS '+esc(g.ver):'') : (String(g.src).startsWith('gtfs-archiwum')? 'z archiwum (wariant od '+esc(g.ver)+', niezapisana)' : 'wg bieżącego rozkładu (niezapisana)')}</span>`;
     const pl=L.polyline(g.line,{color:col, weight:isF?7:5, opacity:dim?.25:.9, dashArray:g.exact?null:'6 8', lineCap:'round', lineJoin:'round'}).bindPopup(tip).addTo(MAPSTATE.layer);
     pl.on('click',()=>{ MAPSTATE.focus=rkey(r); renderMap(); });
     L.circleMarker(g.a,{radius:6, color:col, weight:3, fillColor:'#fff', fillOpacity:1, opacity:dim?.3:1}).bindPopup(tip).addTo(MAPSTATE.layer);
