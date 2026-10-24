@@ -247,7 +247,7 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
       <div class="field"><label>Pobieranie GTFS-RT</label>
         <select class="f" id="s-rtmode"><option value="auto">Automatycznie (bezpośrednio, a gdy się nie da – przez Apps Script)</option><option value="proxy">Zawsze przez Apps Script</option><option value="direct">Zawsze bezpośrednio z ZTP</option></select></div>
       <div class="field"><label>Źródła (kanały ZTP)</label>
-        <div class="inl"><label class="chip"><input type="checkbox" id="s-fA"> A – autobusy</label><label class="chip"><input type="checkbox" id="s-fT"> T – tramwaje</label><label class="chip"><input type="checkbox" id="s-fM"> M</label></div></div>
+        <div class="inl"><label class="chip"><input type="checkbox" id="s-fA"> A – autobusy MPK</label><label class="chip"><input type="checkbox" id="s-fT"> T – tramwaje MPK</label><label class="chip"><input type="checkbox" id="s-fM"> M – Mobilis</label></div></div>
       <div class="field"><label>Numer taborowy z pola</label>
         <select class="f" id="s-vfield"><option value="auto">Automatycznie (label → license_plate → id)</option><option value="label">vehicle.label</option><option value="license_plate">vehicle.license_plate</option><option value="id">vehicle.id</option></select></div>
       <div class="field"><label>Brygada</label>
@@ -255,9 +255,12 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
         <input class="f" id="s-bregex" style="margin-top:8px" placeholder="np. block_(\d+)_ — grupa 1 = brygada" autocapitalize="off"></div>
       <div class="sw"><span>Brygadę zapisuj tylko dla tramwajów</span><input type="checkbox" id="s-btram"></div>
       <div class="field"><label>Numer słupka przystanku</label>
-        <select class="f" id="s-post"><option value="code">Z pola stop_code (np. „Rondo Mogilskie 05”)</option><option value="code2">Ostatnie 2 cyfry stop_code</option><option value="idre">Wyrażenie regularne na stop_id</option><option value="off">Bez numeru słupka – sama nazwa</option></select>
+        <select class="f" id="s-post"><option value="code2">Ostatnie 2 cyfry stop_code – numer słupka (np. „Rondo Mogilskie 05”)</option><option value="code">Całe pole stop_code</option><option value="idre">Wyrażenie regularne na stop_id</option><option value="off">Bez numeru słupka – sama nazwa</option></select>
         <input class="f" id="s-postre" style="margin-top:8px" placeholder="np. (\d{2})$ — grupa 1 = słupek" autocapitalize="off"></div>
       <div class="sw"><span>W statystykach łącz słupki jednego przystanku</span><input type="checkbox" id="s-postmerge"></div>
+      <div class="field"><label>Prefiksy numerów bocznych (opcjonalnie)</label>
+        <textarea class="f" id="s-fleet" placeholder="np.&#10;HY 840-874&#10;BA 114-163" autocapitalize="characters" style="height:90px"></textarea>
+        <div class="hint">GTFS-RT ZTP podaje sam numer (np. 864). Litery (HY864) dobieram z Twojej historii przejazdów – ten sam numer, a gdy go nie było, sąsiednie numery tego samego typu. Litery muszą pasować do kanału: T → H/R, A → B/D/P/K, M (Mobilis) → M. Tu możesz dopisać zakresy, które mają pierwszeństwo przed zgadywaniem: „PREFIKS od-do”, np. HY 840-874.</div></div>
       <div class="field"><label>Katalog danych statycznego GTFS</label><input class="f" id="s-data" autocapitalize="off"></div>
       <div class="hint" id="s-static-info"></div>
       <div class="inl" style="margin-top:12px"><button class="btn sm" id="b-diag">Diagnostyka GTFS-RT w pobliżu</button></div>
@@ -293,7 +296,7 @@ const VERSION = '1.0.0';
 const RT_URL = 'https://gtfs.ztp.krakow.pl/';
 const LS_KEY = 'przejazdy.v1';
 const DEFAULTS = { backend:'', key:'', dataUrl:'./data/', buffer:20, vehRadius:60, rtMode:'auto',
-  feeds:['A','T'], vehField:'auto', brigadeRule:'auto', brigadeRegex:'', brigadeTramsOnly:true, theme:'', postMode:'code', postRegex:'', postMerge:true };
+  feeds:['A','T','M'], vehField:'auto', brigadeRule:'auto', brigadeRegex:'', brigadeTramsOnly:true, theme:'', postMode:'code2', postRegex:'', postMerge:true, fleetRules:'' };
 
 /* ---------------- stan ---------------- */
 const S = { settings:{...DEFAULTS}, rides:[], active:null, prepared:null, lastPull:0, statsRange:'all' };
@@ -301,6 +304,8 @@ function load(){
   try{
     const j = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
     S.settings = {...DEFAULTS, ...(j.settings||{})};
+    if(!S.settings.mig3){ if(!S.settings.feeds.includes('M')) S.settings.feeds=[...S.settings.feeds,'M']; S.settings.mig3=1; }
+    if(!S.settings.mig2){ if(S.settings.postMode==='code') S.settings.postMode='code2'; S.settings.mig2=1; }   // słupek = 2 ostatnie cyfry
     S.rides = j.rides || []; S.active = j.active || null; S.prepared = j.prepared || null; S.lastPull = j.lastPull || 0;
   }catch(e){ console.warn('storage', e); }
 }
@@ -383,6 +388,17 @@ async function fetchT(url, opt={}, ms=10000){ const c=new AbortController(); con
 
 /* ---------------- dane statyczne ---------------- */
 const G = { stops:[], routes:{}, trips:null, tripsP:null, dep:{}, generated:null, ok:false, rt:{status:'–', src:null, at:0}, directOk:null };
+/** Przejazdy zapisane przez aplikację wcześniejszą wersją: „Rondo Mogilskie 123405” → „Rondo Mogilskie 05”, „864” → „HY864”. */
+function repairAppRides(){
+  if(S.settings.postMode==='off' || !G.stops.length) return;
+  const names=new Set(G.stops.map(s=>s.name)); let n=0;
+  const fixStop=x=>{ const m=String(x||'').match(/^(.*\S)\s+(\d{3,})$/); return (m && names.has(m[1])) ? m[1]+' '+m[2].slice(-2) : x; };
+  for(const r of S.rides){ if(!r.id || r.sync==='delete') continue;
+    const f=fixStop(r.from), t=fixStop(r.to), v=resolveVehicle(r.vehicle, modeOf(r.line,r.mode), r.feed);
+    if(f!==r.from || t!==r.to || v!==r.vehicle){ r.from=f; r.to=t; r.vehicle=v; if(r.sync==='ok') r.sync='update'; n++; } }
+  for(const a of [S.active, S.prepared]) if(a){ a.from=fixStop(a.from); a.vehicle=resolveVehicle(a.vehicle, modeOf(a.line,a.mode), a.feed); }
+  if(n){ save(); renderAll(); sync(true); toast(`Poprawiono zapis ${n} przejazdów (słupek / numer boczny)`); }
+}
 async function loadStatic(){
   try{
     const r = await fetchT(S.settings.dataUrl.replace(/\/?$/,'/')+'stops.json', {}, 15000);
@@ -390,6 +406,7 @@ async function loadStatic(){
     const j = await r.json();
     G.stops = j.stops.map(s=>({id:s[0], name:s[1], code:s[2], lat:s[3], lon:s[4], feed:s[5]}));
     G.routes = j.routes || {}; G.generated = j.generated; G.ok = true;
+    setTimeout(repairAppRides, 0);
     G.nameSet=new Set(G.stops.map(s=>s.name));
     const names=[...new Set([...G.stops.map(stopLabel), ...G.nameSet])].sort((a,b)=>a.localeCompare(b,'pl'));
     $('#stopnames').innerHTML = names.map(n=>`<option value="${esc(n)}">`).join('');
@@ -534,10 +551,11 @@ async function getFeeds(names, maxAge=15000){
   const st=S.settings; let src=null, errs=[];
   const tryDirect = st.rtMode==='direct' || (st.rtMode==='auto' && G.directOk!==false);
   if(tryDirect){
-    try{
-      const bufs = await Promise.all(need.map(n=>fetchT(RT_URL+n+'.pb?t='+now,{cache:'no-store'},8000).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.arrayBuffer(); })));
-      need.forEach((n,i)=>{ RTC[n]={at:now,buf:bufs[i]}; res[n]=bufs[i]; }); G.directOk=true; src='ZTP';
-    }catch(e){ errs.push('bezpośrednio: '+e.message); if(st.rtMode==='auto') G.directOk=false; }
+    const rs = await Promise.allSettled(need.map(n=>fetchT(RT_URL+n+'.pb?t='+now,{cache:'no-store'},8000).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.arrayBuffer(); })));
+    const okN = rs.filter(r=>r.status==='fulfilled').length;
+    rs.forEach((r,i)=>{ if(r.status==='fulfilled'){ RTC[need[i]]={at:now,buf:r.value}; res[need[i]]=r.value; } });
+    if(okN){ G.directOk=true; src='ZTP'; if(okN<need.length) errs.push('część kanałów niedostępna'); }
+    else { const e=rs[0].reason; errs.push('bezpośrednio: '+(e&&e.message)); if(st.rtMode==='auto') G.directOk=false; }
   }
   if(!src && st.rtMode!=='direct' && st.backend){
     try{
@@ -561,6 +579,42 @@ function lineOf(feed, routeId, info){
   const key = routeId ? feed+':'+routeId : info?.routeKey; const r = key && G.routes[key];
   return r ? { line:String(r[0]), mode: r[1]===0||r[1]===900 ? 'T' : (feed==='T'?'T':'A') } : { line:'', mode: feed==='T'?'T':'A' };
 }
+/* numer boczny: GTFS-RT daje cyfry, prefiks literowy (HY864) bierzemy z historii lub reguł.
+   Kanał ZTP wyznacza dopuszczalną pierwszą literę: T (tramwaje MPK) → H/R, A (autobusy MPK) → B/D/P/K, M (Mobilis) → M. */
+const FEED_LETTERS = { T:'HR', A:'BDPK', M:'M' };
+const groupOfPrefix = p => { const c=String(p||'')[0]; for(const g in FEED_LETTERS) if(FEED_LETTERS[g].includes(c)) return g; return ''; };
+let FLEET=null, FLEET_N=-1;
+function fleet(){
+  if(FLEET && FLEET_N===S.rides.length) return FLEET;
+  const exact={}, list={T:[],A:[],M:[]};
+  for(const r of [...S.rides].sort((a,b)=>(a.date||'').localeCompare(b.date||''))){   // nowsze nadpisują starsze
+    const m=String(r.vehicle||'').trim().toUpperCase().match(/^([A-Z]{1,3})\s*-?\s*(\d{2,4})$/); if(!m) continue;
+    const g=groupOfPrefix(m[1]); if(!g) continue;
+    exact[g+':'+(+m[2])]={p:m[1], d:r.date||''};
+  }
+  for(const k in exact){ const [g,n]=k.split(':'); list[g].push([+n, exact[k].p]); }
+  for(const g in list) list[g].sort((a,b)=>a[0]-b[0]);
+  const rules=[]; for(const line of String(S.settings.fleetRules||'').split(/\n/)){
+    const m=line.trim().toUpperCase().match(/^([A-Z]{1,3})\s+(\d+)\s*-\s*(\d+)$/); if(m) rules.push({p:m[1], a:+m[2], b:+m[3], g:groupOfPrefix(m[1])}); }
+  FLEET={exact, list, rules}; FLEET_N=S.rides.length; return FLEET;
+}
+function resolveVehicle(raw, mode, feed){
+  const v=String(raw||'').trim(); if(!/^\d{1,4}$/.test(v)) return v.toUpperCase();
+  const n=+v, F=fleet();
+  const groups = FEED_LETTERS[feed] ? [feed] : (mode==='T' ? ['T'] : ['A','M']);
+  // 1) ten sam numer w historii (przy kilku możliwych kanałach – najnowszy wpis)
+  const ex=groups.map(g=>F.exact[g+':'+n]).filter(Boolean).sort((a,b)=>b.d.localeCompare(a.d));
+  if(ex.length) return ex[0].p+v;
+  // 2) reguły użytkownika
+  const rule=F.rules.find(x=>n>=x.a && n<=x.b && groups.includes(x.g)); if(rule) return rule.p+v;
+  // 3) sąsiednie numery w tym samym kanale
+  const hits=[];
+  for(const g of groups){ const L=F.list[g]; let lo=null, hi=null;
+    for(const x of L){ if(x[0]<n) lo=x; else if(x[0]>n){ hi=x; break; } }
+    if(lo && hi && lo[1]===hi[1] && hi[0]-lo[0]<=60) hits.push(lo[1]);
+    else { const near=[lo,hi].filter(x=>x && Math.abs(x[0]-n)<=5); if(near.length===1) hits.push(near[0][1]); } }
+  return hits.length===1 ? hits[0]+v : v;
+}
 function vehName(v){ const f=S.settings.vehField; if(f==='label') return v.label; if(f==='id') return v.id; if(f==='license_plate') return v.plate;
   return v.label || v.plate || v.id || ''; }
 function brigadeOf(tripId, info, line){
@@ -574,7 +628,7 @@ function brigadeOf(tripId, info, line){
 function sugFromTrip(o){   // o: {feed, tripId, routeId, veh, ...}
   const info=tripInfo(o.feed, o.tripId); const L=lineOf(o.feed, o.routeId, info);
   return { feed:o.feed, tripId:o.tripId||'', routeId:o.routeId||'', line:L.line, mode:L.mode, headsign:info?.headsign||'',
-    vehicle:vehName(o.veh||{}), vehicleId:o.veh?.id||'', brigade:brigadeOf(o.tripId, info, L.line), block:info?.block||'' };
+    vehicle:resolveVehicle(vehName(o.veh||{}), L.mode, o.feed), vehicleId:o.veh?.id||'', brigade:brigadeOf(o.tripId, info, L.line), block:info?.block||'' };
 }
 
 async function suggestLines(pos, stopGroups, onUpdate){
@@ -910,7 +964,7 @@ async function endRide(){
     $('#b-x').onclick=closeSheet;
     $('#b-ok').onclick=()=>{ readDraft(ctx); const d=ctx.draft; if(parseTime(d.arr)==null) return toast('Podaj godzinę przyjazdu hh:mm:ss');
       if(durSec(d)>4*3600 && !confirm(`Czas podróży wychodzi ${fmtDur(durSec(d))} – na pewno zapisać?`)) return;
-      const r={...d, sync:'add'}; delete r.headsign; delete r.feed;
+      const r={...d, sync:'add'}; delete r.headsign;
       S.rides.unshift(r); sortRides(); S.active=null; save(); closeSheet(); renderAll(); toast('Zapisano przejazd'); sync(); };
   };
   let calcN=0;
@@ -1106,7 +1160,7 @@ function renderSet(){
   const s=S.settings; const v=(id,x)=>$('#'+id).value=x??'';
   v('s-backend',s.backend); v('s-key',s.key); v('s-buffer',s.buffer); v('s-vrad',s.vehRadius); v('s-rtmode',s.rtMode); v('s-vfield',s.vehField);
   v('s-brule',s.brigadeRule); v('s-bregex',s.brigadeRegex); v('s-data',s.dataUrl); v('s-theme',s.theme);
-  v('s-post',s.postMode); v('s-postre',s.postRegex); $('#s-postmerge').checked=!!s.postMerge;
+  v('s-post',s.postMode); v('s-fleet',s.fleetRules); v('s-postre',s.postRegex); $('#s-postmerge').checked=!!s.postMerge;
   $('#s-postre').style.display = s.postMode==='idre' ? '' : 'none';
   $('#s-btram').checked=!!s.brigadeTramsOnly; ['A','T','M'].forEach(f=>$('#s-f'+f).checked=s.feeds.includes(f));
   $('#s-bregex').style.display = s.brigadeRule==='regex' ? '' : 'none';
@@ -1124,9 +1178,10 @@ function bindSet(){
   on('s-btram',e=>s.brigadeTramsOnly=e.checked);
   on('s-post',e=>{ s.postMode=e.value; loadStatic(); }); on('s-postre',e=>{ s.postRegex=e.value.trim(); loadStatic(); });
   on('s-postmerge',e=>s.postMerge=e.checked);
+  on('s-fleet',e=>{ s.fleetRules=e.value; FLEET=null; });
   on('s-data',e=>{ s.dataUrl=e.value.trim()||'./data/'; G.trips=null; G.tripsP=null; G.dep={}; loadStatic(); });
   on('s-theme',e=>{ s.theme=e.value; applyTheme(); });
-  ['A','T','M'].forEach(f=>on('s-f'+f,()=>{ s.feeds=['A','T','M'].filter(x=>$('#s-f'+x).checked); if(!s.feeds.length) s.feeds=['A','T']; }));
+  ['A','T','M'].forEach(f=>on('s-f'+f,()=>{ s.feeds=['A','T','M'].filter(x=>$('#s-f'+x).checked); if(!s.feeds.length) s.feeds=['A','T','M']; }));
   $('#b-test').onclick=async()=>{ if(!s.backend) return toast('Podaj adres Apps Script');
     try{ const j=await (await fetchT(`${s.backend}?action=ping&key=${encodeURIComponent(s.key)}`,{},15000)).json(); toast(j.ok?`Połączono z arkuszem „${j.sheet}”`:'Błąd: '+j.error); }
     catch(e){ toast('Brak połączenia: '+e.message); } };
