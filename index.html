@@ -737,7 +737,7 @@ function locate(maxMs=8000, good=10){
 /* ---------------- arkusz: synchronizacja ---------------- */
 let syncing=false;
 function payload(r){ return { id:r.id, row:r.row||null, orig:r.orig||null, keepDateEmpty:!!r.keepDateEmpty, date:r.date, dep:r.dep, from:r.from, line:r.line,
-  brigade:r.brigade, vehicle:r.vehicle, to:r.to, arr:r.arr, notes:r.notes, schedDep:r.schedDep||'', schedArr:r.schedArr||'' }; }
+  brigade:r.brigade, vehicle:r.vehicle, to:r.to, arr:r.arr, notes:r.notes, schedDep:r.schedDep||'', schedArr:r.schedArr||'', route:r.route||null }; }
 async function post(body){
   const r=await fetchT(S.settings.backend,{method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({key:S.settings.key, ...body})},20000);
   return r.json();
@@ -776,7 +776,8 @@ async function pull(){
     const pIds=new Set(pending.map(r=>r.id).filter(Boolean)), pRows=new Set(pending.filter(r=>!r.id||r.sync!=='add').map(r=>r.row).filter(Boolean));
     const old=new Map(S.rides.filter(r=>r.id).map(r=>[r.id,r]));
     const remote=j.rides.filter(r=>!(r.id && pIds.has(r.id)) && !pRows.has(r.row)).map(r=>{
-      const o=r.id&&old.get(r.id); return {...r, mode: o?.mode || modeOf(r.line), tripId:o?.tripId, vehicleId:o?.vehicleId, sync:'ok'}; });
+      const o=r.id&&old.get(r.id); return {...r, mode: o?.mode || modeOf(r.line), tripId:o?.tripId, vehicleId:o?.vehicleId, schedInfo:o?.schedInfo, route:(r.id && j.routes && j.routes[r.id]) || null, sync:'ok'}; });
+    MAPSTATE.geo={};
     S.rides=[...pending, ...remote]; sortRides(); S.lastPull=Date.now(); save(); renderAll();
     toast(`Pobrano ${remote.length} przejazdów z arkusza`);
   }catch(e){ toast('Nie udało się pobrać: '+e.message); }
@@ -1016,7 +1017,8 @@ async function endRide(){
     $('#b-ok').onclick=()=>{ readDraft(ctx); const d=ctx.draft; if(parseTime(d.arr)==null) return toast('Podaj godzinę przyjazdu hh:mm:ss');
       if(durSec(d)>4*3600 && !confirm(`Czas podróży wychodzi ${fmtDur(durSec(d))} – na pewno zapisać?`)) return;
       const r={...d, sync:'add'}; delete r.headsign;
-      S.rides.unshift(r); sortRides(); S.active=null; save(); closeSheet(); renderAll(); toast('Zapisano przejazd'); sync(); };
+      S.rides.unshift(r); sortRides(); S.active=null; save(); closeSheet(); renderAll(); toast('Zapisano przejazd');
+      attachRoute(r, []).finally(()=>{ save(); sync(); }); };
   };
   let calcN=0;
   const recalcArr=async()=>{ const n=++calcN; const x=await fillSched({...ctx.draft}, ctx.draft.schedInfo?'arr':'both');
@@ -1071,7 +1073,7 @@ function openEdit(r, isActive){
       <div class="field"><label>Numer taborowy</label><input class="f" id="f-veh" value="${esc(d.vehicle)}" autocapitalize="characters"></div>
     </div>
     ${notesHtml(d.notes, d.mode||modeOf(d.line))}
-    ${(!isActive && S.rides.includes(r) && r.from && r.to)?'<button type="button" class="btn sm" id="b-onmap" style="margin-top:14px">🗺 Pokaż na mapie</button>':''}
+    ${(!isActive && S.rides.includes(r) && r.from && r.to)?`<div class="field"><label>Trasa</label><div class="card" style="padding:10px 12px" id="routebox"></div></div>`:''}
     <div class="actions">${(!isActive && r.date && S.rides.includes(r))?'<button class="btn danger" id="b-del">Usuń</button>':''}<button class="btn" id="b-x">Anuluj</button><button class="btn pri" id="b-ok">Zapisz</button></div>`);
   $('#b-x').onclick=closeSheet;
   bindNotes($('#sheet-body'));
@@ -1084,7 +1086,7 @@ function openEdit(r, isActive){
     ctx.draft.schedInfo=x.schedInfo; $('#f-sdep').value=x.schedDep||''; if($('#f-sarr')) $('#f-sarr').value=x.schedArr||''; updSched(); };
   const updDur=()=>{ const e=$('#f-dur'); if(e) e.value=fmtDur(durSec({dep:normTimeInput($('#f-dep').value), arr:normTimeInput($('#f-arr')?.value)})); };
   $('#f-dep').oninput=updDur; if($('#f-arr')) $('#f-arr').oninput=updDur;
-  const om=$('#b-onmap'); if(om) om.onclick=()=>{ closeSheet(); MAPSTATE.date=r.date; MAPSTATE.focus=rkey(r); show('map'); };
+  if($('#routebox')) routeEditor(ctx, r);
   const del=$('#b-del'); if(del) del.onclick=()=>{ if(!confirm('Usunąć ten przejazd (także z arkusza)?')) return;
     if(r.sync==='add'){ S.rides=S.rides.filter(x=>x!==r); } else { if(!r.id) r.orig=r.orig||{date:r.dateRaw??r.date, dep:r.dep}; r.sync='delete'; }
     save(); closeSheet(); renderAll(); sync(true); };
@@ -1093,12 +1095,43 @@ function openEdit(r, isActive){
     if(!isActive && n.arr && parseTime(n.arr)==null) return toast('Godzina przyjazdu: hh:mm:ss');
     if(n.line!==r.line) n.mode=modeOf(n.line);
     if(isActive){ S.active=n; save(); closeSheet(); renderRide(); return; }
+    const stopsChanged = n.from!==r.from || n.to!==r.to || n.line!==r.line;
     if(!S.rides.includes(r)){ n.id=n.id||uid(); n.sync='add'; S.rides.unshift(n); }
     else { const i=S.rides.indexOf(r);
       if(r.sync==='ok'||r.sync==='conflict'){ if(!r.id){ n.orig={date:r.dateRaw??r.date, dep:r.dep}; n.id=uid(); } n.sync='update'; }
       n.keepDateEmpty = r.dateRaw==='' && n.date===r.date; if(n.date!==r.date) n.dateSrc='';
       S.rides[i]=n; }
-    sortRides(); save(); closeSheet(); renderAll(); toast('Zapisano'); sync(true); };
+    sortRides(); save(); closeSheet(); renderAll(); toast('Zapisano');
+    if(!isActive && n.route && (stopsChanged || ctx.routeChanged)){ if(stopsChanged) attachRoute(n).finally(()=>{ save(); sync(true); }); else sync(true); }
+    else sync(true); };
+}
+
+/* ---------- korekta trasy (w edycji przejazdu) ---------- */
+function routeEditor(ctx, r){
+  const box=$('#routebox'); const d=ctx.draft; let via=[...(d.route?.via||[])];
+  const draw=(msg)=>{
+    const rt=d.route;
+    box.innerHTML=`
+      <div class="small">${rt? `<b>${ctx.routeChanged?'Nowa (zapisze się po „Zapisz”):':'Zapisana:'}</b> ${esc(SRC_LABEL[rt.src]||rt.src)}${rt.ver?` · GTFS ${esc(rt.ver)}`:''}` : '<b>Niezapisana</b> – mapa rysuje ją wg bieżącego rozkładu'}</div>
+      <div class="small faint" style="margin-top:8px">Przystanki „przez” (korekta, np. objazd):</div>
+      <div class="cands" id="via-list">${via.map((v,i)=>`<span class="cand" style="cursor:default">${esc(v)} <button type="button" class="btn sm" data-rm="${i}" style="height:24px;padding:0 8px;margin-left:6px">×</button></span>`).join('') || '<span class="small faint">brak – trasa jak w GTFS</span>'}</div>
+      <div class="inl" style="margin-top:8px"><input class="f" id="via-in" list="stopnames" placeholder="dodaj przystanek przez…" style="height:40px"><button type="button" class="btn sm" id="via-add" style="height:40px">Dodaj</button></div>
+      <div class="inl" style="margin-top:10px;flex-wrap:wrap">
+        <button type="button" class="btn sm pri" id="rt-save">${via.length?'Zapisz korektę':'Zapisz trasę wg GTFS'}</button>
+        ${rt&&rt.src==='reczna'?'<button type="button" class="btn sm" id="rt-reset">Przywróć z GTFS</button>':''}
+        <button type="button" class="btn sm" id="rt-map">🗺 Mapa</button></div>
+      <div class="status">${msg||''}</div>`;
+    box.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{ via.splice(+b.dataset.rm,1); draw(); });
+    $('#via-add').onclick=()=>{ const v=$('#via-in').value.trim(); if(!v) return; if(!stopIdsFor(v).size) return toast('Nie znam takiego przystanku'); via.push(v); draw(); };
+    const run=async(list)=>{ readDraft(ctx); draw('<i class="spin"></i> wyznaczam trasę…');
+      const rr=await attachRoute(d, list); if(SHEET_CTX!==ctx) return;
+      if(!rr){ via=list; draw('⚠ nie udało się wyznaczyć trasy (sprawdź nazwy przystanków)'); return; }
+      ctx.routeChanged=true; via=[...rr.via]; draw(''); };
+    $('#rt-save').onclick=()=>run(via);
+    const rs=$('#rt-reset'); if(rs) rs.onclick=()=>run([]);
+    $('#rt-map').onclick=()=>{ closeSheet(); MAPSTATE.date=r.date; MAPSTATE.focus=rkey(r); show('map'); };
+  };
+  draw();
 }
 
 /* ---------------- widok: historia ---------------- */
@@ -1318,34 +1351,80 @@ function segLine(sh, tr, i, j){
   }
   return pts;
 }
-/** Trasa przejazdu: kurs przez oba przystanki → kurs + jego kontynuacja przez pętlę → linia prosta. */
+/* ---- polyline (algorytm Google, precyzja 1e-5) ---- */
+function polyEncode(pts){
+  let out='', pl=0, pg=0;
+  const enc=v=>{ v=v<0? ~(v<<1) : (v<<1); let s=''; while(v>=0x20){ s+=String.fromCharCode((0x20|(v&0x1f))+63); v>>=5; } return s+String.fromCharCode(v+63); };
+  for(const [la,lo] of pts){ const a=Math.round(la*1e5), b=Math.round(lo*1e5); out+=enc(a-pl)+enc(b-pg); pl=a; pg=b; }
+  return out;
+}
+function polyDecode(str){
+  const pts=[]; let i=0, la=0, lo=0;
+  const dec=()=>{ let r=0, sh=0, b; do{ b=str.charCodeAt(i++)-63; r|=(b&0x1f)<<sh; sh+=5; }while(b>=0x20); return (r&1)? ~(r>>1) : (r>>1); };
+  while(i<str.length){ la+=dec(); lo+=dec(); pts.push([la/1e5, lo/1e5]); }
+  return pts;
+}
+/** Odcinek A→B: najpierw kursy tej linii (także przez pętlę), potem inne linie obsługujące oba przystanki (objazdy). */
+async function segGeom(line, fromLbl, toLbl, prefRk, prefTid){
+  const A=stopIdsFor(fromLbl), B=stopIdsFor(toLbl); if(!A.size || !B.size) return null;
+  const tryRoute=async(rk)=>{
+    const sh=await loadSched(rk); if(!sh) return null;
+    const tids=[...(prefRk===rk && prefTid && sh.trips[prefTid] ? [prefTid] : []), ...Object.keys(sh.trips)];
+    let best=null; const seen=new Set();
+    for(const tid of tids){ const tr=sh.trips[tid]; const sig=tr[2].map(x=>x[0]).join(',')+'|'+tr[3]; if(seen.has(sig)) continue; seen.add(sig);
+      const seq=tr[2].map(x=>sh.stops[x[0]]);
+      for(let i=0;i<seq.length;i++){ if(!A.has(seq[i])) continue;
+        for(let j=i+1;j<seq.length;j++) if(B.has(seq[j])){ if(!best || j-i<best.cost) best={cost:j-i, parts:[[tr,i,j]]}; break; } } }
+    if(!best){ const seen2=new Set();   // przez pętlę: koniec kursu → kolejny kurs tego samego pojazdu
+      for(const tid of tids){ const tr=sh.trips[tid]; const sig=tr[2].map(x=>x[0]).join(','); if(seen2.has(sig)) continue; seen2.add(sig);
+        const seq=tr[2].map(x=>sh.stops[x[0]]); const i=seq.findIndex(x=>A.has(x)); if(i<0) continue;
+        for(const nid of nextTrips(sh, tid, false)){ const t2=sh.trips[nid]; const s2=t2[2].map(x=>sh.stops[x[0]]);
+          const j=s2.findIndex((x,k)=>k>0 && B.has(x)); if(j<0) continue;
+          const cost=(seq.length-1-i)+j; if(!best || cost<best.cost) best={cost, parts:[[tr,i,seq.length-1],[t2,0,j]], loop:true}; } } }
+    if(!best) return null;
+    const ln=[]; for(const [tr,i,j] of best.parts){ const seg=segLine(sh,tr,i,j); ln.push(...(ln.length? seg.slice(1) : seg)); }
+    return { line:ln, src: best.loop? 'gtfs-petla' : 'gtfs', rk };
+  };
+  for(const rk of routeKeysFor(line, prefRk)){ const g=await tryRoute(rk); if(g) return g; }
+  // objazd / odcinek spoza trasy linii: inne linie, które dziś zatrzymują się na obu przystankach
+  const dj=await loadDep(new Date());
+  if(dj){ const ra=new Set(), rb=new Set();
+    for(const id of A) for(const k in (dj.stops[id]||{})) ra.add(dj.routes[+k.split('|')[0]]);
+    for(const id of B) for(const k in (dj.stops[id]||{})) rb.add(dj.routes[+k.split('|')[0]]);
+    for(const rk of [...ra].filter(x=>rb.has(x)).slice(0,8)){ const g=await tryRoute(rk); if(g) return {...g, src:'gtfs-inna-linia'}; } }
+  const a=centroid(A), b=centroid(B); return (a&&b)? { line:[a,b], src:'prosta' } : null;
+}
+const sysOf = (r, rk) => { const k=rk || r.schedInfo?.rk || routeKeysFor(r.line)[0] || ''; const f=k.split(':')[0];
+  return f==='T'?'ZTP-T' : f==='M'?'ZTP-M' : f==='A'?'ZTP-A' : (modeOf(r.line,r.mode)==='T'?'ZTP-T':'ZTP-A'); };
+const gtfsVer = () => (G.generated||'').slice(0,10);
+/** Trasa wg rozkładu (z ewentualnymi przystankami „przez” z ręcznej korekty). */
+async function computeRoute(r, via){
+  via=(via||[]).filter(Boolean); const pts=[r.from, ...via, r.to]; let line=[], srcs=[], rk0=null;
+  for(let k=0;k<pts.length-1;k++){
+    const g=await segGeom(r.line, pts[k], pts[k+1], r.schedInfo?.rk, k===0? r.schedInfo?.tid : null); if(!g) return null;
+    srcs.push(g.src); rk0=rk0||g.rk; line.push(...(line.length? g.line.slice(1) : g.line)); }
+  const src = via.length ? 'reczna' : srcs[0];
+  return { line, src, via, sys:sysOf(r, rk0), exact: !srcs.every(x=>x==='prosta') };
+}
+/** Oblicza i zapisuje trasę w przejeździe (do wysłania do arkusza TRASY_KRAKOW). */
+async function attachRoute(r, via){
+  try{
+    if(!G.ok) await loadStatic();
+    const g=await computeRoute(r, via ?? r.route?.via ?? []); if(!g) return null;
+    if(!r.id){ r.orig=r.orig||{date:r.dateRaw??r.date, dep:r.dep}; r.id=uid(); r.keepDateEmpty = r.dateRaw===''; }
+    const ln=g.line.filter((p,k,arr)=>k===0 || Math.abs(p[0]-arr[k-1][0])>1e-6 || Math.abs(p[1]-arr[k-1][1])>1e-6);
+    r.route={ sys:g.sys, src:g.src, via:g.via, poly:polyEncode(ln), ver:gtfsVer() };
+    if(r.sync==='ok'||r.sync==='conflict') r.sync='update';
+    MAPSTATE.geo={}; return r.route;
+  }catch(e){ console.warn('trasa', e); return null; }
+}
+const SRC_LABEL={ 'gtfs':'GTFS', 'gtfs-petla':'GTFS (przez pętlę)', 'gtfs-inna-linia':'GTFS (po trasie innej linii)', 'reczna':'korekta ręczna', 'prosta':'linia prosta – brak w GTFS' };
+/** Geometria do mapy: zapisana trasa, a gdy jej brak – wyliczona z bieżącego rozkładu (bez zapisu). */
 async function rideGeometry(r){
+  if(r.route?.poly){ const line=polyDecode(r.route.poly); if(line.length>1) return { line, a:line[0], b:line[line.length-1], exact:r.route.src!=='prosta', saved:true, src:r.route.src, ver:r.route.ver }; }
   const key=[r.line,r.from,r.to].join('|'); if(key in MAPSTATE.geo) return MAPSTATE.geo[key];
-  const A=stopIdsFor(r.from), B=stopIdsFor(r.to); let out=null;
-  if(A.size && B.size){
-    for(const rk of routeKeysFor(r.line, r.schedInfo?.rk)){
-      const sh=await loadSched(rk); if(!sh) continue;
-      const pref = r.schedInfo?.rk===rk && sh.trips[r.schedInfo.tid] ? [r.schedInfo.tid] : [];
-      const tids=[...pref, ...Object.keys(sh.trips)];
-      let best=null; const seen=new Set();
-      for(const tid of tids){ const tr=sh.trips[tid]; const sig=tr[2].map(x=>x[0]).join(',')+'|'+tr[3]; if(seen.has(sig)) continue; seen.add(sig);
-        const seq=tr[2].map(x=>sh.stops[x[0]]);
-        for(let i=0;i<seq.length;i++){ if(!A.has(seq[i])) continue;
-          for(let j=i+1;j<seq.length;j++) if(B.has(seq[j])){ if(!best || j-i<best.cost) best={cost:j-i, parts:[[tr,i,j]]}; break; } } }
-      if(!best){   // przez pętlę: koniec kursu → kolejny kurs tego samego pojazdu
-        const seen2=new Set();
-        for(const tid of tids){ const tr=sh.trips[tid]; const sig=tr[2].map(x=>x[0]).join(','); if(seen2.has(sig)) continue; seen2.add(sig);
-          const seq=tr[2].map(x=>sh.stops[x[0]]); const i=seq.findIndex(x=>A.has(x)); if(i<0) continue;
-          for(const nid of nextTrips(sh, tid, false)){ const t2=sh.trips[nid]; const s2=t2[2].map(x=>sh.stops[x[0]]);
-            const j=s2.findIndex((x,k)=>k>0 && B.has(x)); if(j<0) continue;
-            const cost=(seq.length-1-i)+j; if(!best || cost<best.cost) best={cost, parts:[[tr,i,seq.length-1],[t2,0,j]], loop:true}; } }
-      }
-      if(!best) continue;
-      const line=[]; for(const [tr,i,j] of best.parts){ const seg=segLine(sh,tr,i,j); line.push(...(line.length? seg.slice(1) : seg)); }
-      out={ line, a:line[0], b:line[line.length-1], exact:true, loop:!!best.loop }; break;
-    }
-    if(!out){ const a=centroid(A), b=centroid(B); if(a&&b) out={ line:[a,b], a, b, exact:false }; }
-  }
+  const g=await computeRoute(r, []);
+  const out = g ? { line:g.line, a:g.line[0], b:g.line[g.line.length-1], exact:g.exact, saved:false, src:g.src } : null;
   MAPSTATE.geo[key]=out; return out;
 }
 /** Ukrywa etykiety nachodzące na siebie (pierwszeństwo: numery linii, potem przystanki). Ukryte są nadal w okienku po dotknięciu. */
@@ -1393,7 +1472,7 @@ async function renderMap(){
   const bounds=[]; const focusB=[]; let missing=0; const stopLbl=new Map();
   rides.forEach((r,i)=>{ const g=geos[i]; if(!g){ missing++; return; }
     const isF = MAPSTATE.focus===rkey(r), dim = MAPSTATE.focus && !isF; const col=rideColor(r);
-    const tip=`<b>${esc(r.line||'?')}</b> ${esc(r.from)} → ${esc(r.to)}<br>${esc((r.dep||'').slice(0,5))}–${esc((r.arr||'').slice(0,5))} · ${fmtDur(durSec(r))}${r.vehicle?' · '+esc(r.vehicle):''}`;
+    const tip=`<b>${esc(r.line||'?')}</b> ${esc(r.from)} → ${esc(r.to)}<br>${esc((r.dep||'').slice(0,5))}–${esc((r.arr||'').slice(0,5))} · ${fmtDur(durSec(r))}${r.vehicle?' · '+esc(r.vehicle):''}<br><span style="color:var(--ink3)">trasa: ${g.saved? 'zapisana · '+esc(SRC_LABEL[g.src]||g.src)+(g.ver?' · GTFS '+esc(g.ver):'') : 'wg bieżącego rozkładu (niezapisana)'}</span>`;
     const pl=L.polyline(g.line,{color:col, weight:isF?7:5, opacity:dim?.25:.9, dashArray:g.exact?null:'6 8', lineCap:'round', lineJoin:'round'}).bindPopup(tip).addTo(MAPSTATE.layer);
     pl.on('click',()=>{ MAPSTATE.focus=rkey(r); renderMap(); });
     L.circleMarker(g.a,{radius:6, color:col, weight:3, fillColor:'#fff', fillOpacity:1, opacity:dim?.3:1}).bindPopup(tip).addTo(MAPSTATE.layer);
