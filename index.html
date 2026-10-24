@@ -167,6 +167,12 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
 .legend{display:flex;gap:14px;font-size:12px;color:var(--ink3);margin:8px 2px 0;flex-wrap:wrap}
 .legend i{display:inline-block;width:18px;height:4px;border-radius:2px;vertical-align:middle;margin-right:5px}
 .leaflet-container{font:inherit}
+.leaflet-tooltip.lbl{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:2px 6px;font-size:11.5px;line-height:1.3;box-shadow:0 2px 6px rgba(0,0,0,.15);white-space:nowrap}
+.leaflet-tooltip.lbl::before{display:none}
+.lbl-ride{display:flex;align-items:center;gap:5px;padding:2px 6px 2px 2px!important}
+.lbl-ride .ml{display:inline-block;min-width:24px;padding:1px 5px;border-radius:5px;color:#fff;font-weight:800;text-align:center}
+.lbl-ride .md{color:var(--ink2);font-weight:600}
+.lbl-stop b{font-weight:700;margin-right:5px}.lbl-stop .st{color:var(--ink3);font-variant-numeric:tabular-nums}
 .leaflet-popup-content{margin:10px 12px;font-size:13px;line-height:1.4}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.9)}}
 :root[data-theme="dark"] .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.9) contrast(.9)}
@@ -232,7 +238,7 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
 <!-- ============ MAPA ============ -->
 <main id="v-map" class="view">
   <div class="wrap">
-    <div class="top"><div><small id="map-sub"></small><h1>Mapa</h1></div><button class="btn sm" id="m-all" style="display:none">Cały dzień</button></div>
+    <div class="top"><div><small id="map-sub"></small><h1>Mapa</h1></div><div class="inl"><button class="btn sm" id="m-lbl">Etykiety</button><button class="btn sm" id="m-all" style="display:none">Cały dzień</button></div></div>
     <div class="mapbar"><button class="btn" id="m-prev" aria-label="poprzedni dzień z przejazdami">‹</button><input class="f" type="date" id="m-date"><button class="btn" id="m-next" aria-label="następny dzień z przejazdami">›</button></div>
     <div class="legend"><span><i style="background:var(--tram)"></i>tramwaj</span><span><i style="background:var(--bus)"></i>autobus</span><span><i style="background:var(--night)"></i>nocny</span><span><i style="background:none;border-top:3px dashed var(--ink3);height:0"></i>przerywana – brak trasy w rozkładzie</span></div>
   </div>
@@ -512,10 +518,32 @@ async function schedForStart(r){
   }
   return exact || best;
 }
+/* Kontynuacja kursu tym samym pojazdem (linie quasi-okrężne, np. 140/168: dojazd do pętli i powrót inną trasą).
+   Najpierw po bloku (brygadzie) z rozkładu, a gdy go brak – kurs startujący z przystanku o tej samej nazwie co koniec. */
+function shardIndex(sh){
+  if(sh._idx) return sh._idx;
+  const byBlock={}, byFirst={};
+  for(const tid in sh.trips){ const tr=sh.trips[tid]; const first=tr[2][0]; if(!first) continue;
+    if(tr[4]) (byBlock[tr[4]+'|'+tr[0]] ||= []).push([first[2], tid]);
+    const nm=stopById(sh.stops[first[0]])?.name; if(nm) (byFirst[nm] ||= []).push([first[2], tid]); }
+  for(const k in byBlock) byBlock[k].sort((a,b)=>a[0]-b[0]);
+  for(const k in byFirst) byFirst[k].sort((a,b)=>a[0]-b[0]);
+  return sh._idx={byBlock, byFirst};
+}
+function nextTrips(sh, tid, timed){
+  const tr=sh.trips[tid]; const last=tr[2][tr[2].length-1]; const ix=shardIndex(sh); const out=[];
+  if(tr[4]){ const L=ix.byBlock[tr[4]+'|'+tr[0]]||[]; const n=L.find(([t,id])=>id!==tid && t>=last[1]-60); if(n) out.push(n[1]); }
+  if(!out.length){ const nm=stopById(sh.stops[last[0]])?.name; const L=(nm && ix.byFirst[nm])||[];
+    if(timed){ const n=L.find(([t,id])=>id!==tid && sh.trips[id][0]===tr[0] && t>=last[1]-60 && t<=last[1]+2700); if(n) out.push(n[1]); }
+    else { const seen=new Set(); for(const [,id] of L){ const sig=sh.trips[id][2].map(x=>x[0]).join(','); if(!seen.has(sig)){ seen.add(sig); out.push(id); } } } }
+  return out;
+}
 async function schedForEnd(r){
   const m=r.schedInfo; if(!m) return null; const sh=await loadSched(m.rk); const tr=sh?.trips[m.tid]; if(!tr) return null;
   const ids=stopIdsFor(r.to); if(!ids.size) return null;
   for(let j=m.i+1;j<tr[2].length;j++){ const [si,asec]=tr[2][j]; if(ids.has(sh.stops[si])) return secToHms(asec-m.shift); }
+  for(const nid of nextTrips(sh, m.tid, true)){ const t2=sh.trips[nid];          // jazda przez pętlę tym samym pojazdem
+    for(let j=1;j<t2[2].length;j++){ const [si,asec]=t2[2][j]; if(ids.has(sh.stops[si])) return secToHms(asec-m.shift); } }
   return null;
 }
 async function fillSched(r, which){   // which: 'dep' | 'arr' | 'both'
@@ -1261,7 +1289,7 @@ async function diag(){
 }
 
 /* ---------------- widok: mapa ---------------- */
-const MAPSTATE={ date:null, focus:null, map:null, layer:null, geo:{} };
+const MAPSTATE={ date:null, focus:null, map:null, layer:null, geo:{}, labels:true };
 let LP=null;
 function loadLeaflet(){
   if(window.L) return Promise.resolve(window.L);
@@ -1278,35 +1306,61 @@ function rideColor(r){ const c=badgeCls(r.line, r.mode); return cssVar(c==='T'?'
 function centroid(ids){ const pts=[...ids].map(stopById).filter(Boolean); if(!pts.length) return null;
   return [pts.reduce((a,s)=>a+s.lat,0)/pts.length, pts.reduce((a,s)=>a+s.lon,0)/pts.length]; }
 const d2 = (a,b) => (a[0]-b[0])**2 + ((a[1]-b[1])*0.64)**2;
-/** Trasa przejazdu: odcinek kształtu linii (shapes) → kolejne przystanki kursu → linia prosta. */
+/** Odcinek kursu od i do j: geometria z shapes.txt albo kolejne przystanki. */
+function segLine(sh, tr, i, j){
+  const pts=tr[2].slice(i, j+1).map(x=>stopById(sh.stops[x[0]])).filter(Boolean).map(s=>[s.lat,s.lon]);
+  const shape=tr[3] && sh.shapes && sh.shapes[tr[3]];
+  if(shape && shape.length>1 && pts.length>=2){
+    let ia=0, ib=0, bd=1e9;
+    shape.forEach((p,k)=>{ const d=d2(p,pts[0]); if(d<bd){ bd=d; ia=k; } }); bd=1e9;
+    for(let k=ia;k<shape.length;k++){ const d=d2(shape[k],pts[pts.length-1]); if(d<bd){ bd=d; ib=k; } }
+    if(ib>ia) return [pts[0], ...shape.slice(ia, ib+1), pts[pts.length-1]];
+  }
+  return pts;
+}
+/** Trasa przejazdu: kurs przez oba przystanki → kurs + jego kontynuacja przez pętlę → linia prosta. */
 async function rideGeometry(r){
   const key=[r.line,r.from,r.to].join('|'); if(key in MAPSTATE.geo) return MAPSTATE.geo[key];
   const A=stopIdsFor(r.from), B=stopIdsFor(r.to); let out=null;
   if(A.size && B.size){
     for(const rk of routeKeysFor(r.line, r.schedInfo?.rk)){
       const sh=await loadSched(rk); if(!sh) continue;
+      const pref = r.schedInfo?.rk===rk && sh.trips[r.schedInfo.tid] ? [r.schedInfo.tid] : [];
+      const tids=[...pref, ...Object.keys(sh.trips)];
       let best=null; const seen=new Set();
-      const tids = r.schedInfo?.rk===rk && sh.trips[r.schedInfo.tid] ? [r.schedInfo.tid, ...Object.keys(sh.trips)] : Object.keys(sh.trips);
       for(const tid of tids){ const tr=sh.trips[tid]; const sig=tr[2].map(x=>x[0]).join(',')+'|'+tr[3]; if(seen.has(sig)) continue; seen.add(sig);
         const seq=tr[2].map(x=>sh.stops[x[0]]);
         for(let i=0;i<seq.length;i++){ if(!A.has(seq[i])) continue;
-          for(let j=i+1;j<seq.length;j++){ if(B.has(seq[j])){ if(!best || j-i<best.j-best.i) best={tr, seq, i, j}; break; } } }
-        if(best && tid===r.schedInfo?.tid) break; }
-      if(!best) continue;
-      const pts=best.seq.slice(best.i, best.j+1).map(stopById).filter(Boolean).map(s=>[s.lat,s.lon]);
-      let line=pts;
-      const shape=best.tr[3] && sh.shapes && sh.shapes[best.tr[3]];
-      if(shape && shape.length>1 && pts.length>=2){
-        let ia=0, ib=0, bd=1e9;
-        shape.forEach((p,k)=>{ const d=d2(p,pts[0]); if(d<bd){ bd=d; ia=k; } }); bd=1e9;
-        for(let k=ia;k<shape.length;k++){ const d=d2(shape[k],pts[pts.length-1]); if(d<bd){ bd=d; ib=k; } }
-        if(ib>ia) line=[pts[0], ...shape.slice(ia, ib+1), pts[pts.length-1]];
+          for(let j=i+1;j<seq.length;j++) if(B.has(seq[j])){ if(!best || j-i<best.cost) best={cost:j-i, parts:[[tr,i,j]]}; break; } } }
+      if(!best){   // przez pętlę: koniec kursu → kolejny kurs tego samego pojazdu
+        const seen2=new Set();
+        for(const tid of tids){ const tr=sh.trips[tid]; const sig=tr[2].map(x=>x[0]).join(','); if(seen2.has(sig)) continue; seen2.add(sig);
+          const seq=tr[2].map(x=>sh.stops[x[0]]); const i=seq.findIndex(x=>A.has(x)); if(i<0) continue;
+          for(const nid of nextTrips(sh, tid, false)){ const t2=sh.trips[nid]; const s2=t2[2].map(x=>sh.stops[x[0]]);
+            const j=s2.findIndex((x,k)=>k>0 && B.has(x)); if(j<0) continue;
+            const cost=(seq.length-1-i)+j; if(!best || cost<best.cost) best={cost, parts:[[tr,i,seq.length-1],[t2,0,j]], loop:true}; } }
       }
-      out={ line, a:pts[0], b:pts[pts.length-1], exact:true, shape:line!==pts }; break;
+      if(!best) continue;
+      const line=[]; for(const [tr,i,j] of best.parts){ const seg=segLine(sh,tr,i,j); line.push(...(line.length? seg.slice(1) : seg)); }
+      out={ line, a:line[0], b:line[line.length-1], exact:true, loop:!!best.loop }; break;
     }
     if(!out){ const a=centroid(A), b=centroid(B); if(a&&b) out={ line:[a,b], a, b, exact:false }; }
   }
   MAPSTATE.geo[key]=out; return out;
+}
+/** Ukrywa etykiety nachodzące na siebie (pierwszeństwo: numery linii, potem przystanki). Ukryte są nadal w okienku po dotknięciu. */
+function declutter(){
+  const els=[...document.querySelectorAll('#map .leaflet-tooltip.lbl')];
+  els.sort((a,b)=>b.classList.contains('lbl-ride')-a.classList.contains('lbl-ride'));
+  const placed=[];
+  for(const e of els){ e.style.visibility='visible'; const r=e.getBoundingClientRect();
+    if(placed.some(p=>!(r.right<p.left-2||r.left>p.right+2||r.bottom<p.top-2||r.top>p.bottom+2))) e.style.visibility='hidden'; else placed.push(r); }
+}
+function midPoint(line){
+  if(line.length<2) return line[0]; let tot=0; const seg=[];
+  for(let k=1;k<line.length;k++){ const d=Math.sqrt(d2(line[k-1],line[k])); seg.push(d); tot+=d; }
+  let acc=0; for(let k=0;k<seg.length;k++){ if(acc+seg[k]>=tot/2){ const t=(tot/2-acc)/(seg[k]||1); return [line[k][0]+(line[k+1][0]-line[k][0])*t, line[k][1]+(line[k+1][1]-line[k][1])*t]; } acc+=seg[k]; }
+  return line[line.length-1];
 }
 function rideDates(){ return [...new Set(visibleRides().map(r=>r.date).filter(Boolean))].sort(); }
 async function renderMap(){
@@ -1320,6 +1374,7 @@ async function renderMap(){
   $('#m-prev').onclick=()=>step(-1); $('#m-next').onclick=()=>step(1);
   $('#m-all').onclick=()=>{ MAPSTATE.focus=null; renderMap(); };
   $('#m-all').style.display = MAPSTATE.focus? '' : 'none';
+  $('#m-lbl').classList.toggle('pri', MAPSTATE.labels); $('#m-lbl').onclick=()=>{ MAPSTATE.labels=!MAPSTATE.labels; renderMap(); };
   const rides=visibleRides().filter(r=>r.date===MAPSTATE.date).sort((a,b)=>(a.dep||'').localeCompare(b.dep||'') || (a.row||0)-(b.row||0));
   const list=$('#map-list');
   list.innerHTML = rides.length ? '<div class="status"><i class="spin"></i> wyznaczam trasy…</div>' : '<div class="empty">Brak przejazdów tego dnia</div>';
@@ -1329,12 +1384,13 @@ async function renderMap(){
     MAPSTATE.map=L.map('map',{zoomControl:true, attributionControl:true}).setView([50.0614,19.9366],12);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(MAPSTATE.map);
     MAPSTATE.layer=L.layerGroup().addTo(MAPSTATE.map);
+    MAPSTATE.map.on('zoomend moveend', ()=>requestAnimationFrame(declutter));
   }
   setTimeout(()=>MAPSTATE.map.invalidateSize(),50);
   const map=MAPSTATE.map; MAPSTATE.layer.clearLayers();
   const geos=await Promise.all(rides.map(r=>rideGeometry(r).catch(()=>null)));
   if(curView!=='map') return;
-  const bounds=[]; const focusB=[]; let missing=0;
+  const bounds=[]; const focusB=[]; let missing=0; const stopLbl=new Map();
   rides.forEach((r,i)=>{ const g=geos[i]; if(!g){ missing++; return; }
     const isF = MAPSTATE.focus===rkey(r), dim = MAPSTATE.focus && !isF; const col=rideColor(r);
     const tip=`<b>${esc(r.line||'?')}</b> ${esc(r.from)} → ${esc(r.to)}<br>${esc((r.dep||'').slice(0,5))}–${esc((r.arr||'').slice(0,5))} · ${fmtDur(durSec(r))}${r.vehicle?' · '+esc(r.vehicle):''}`;
@@ -1343,9 +1399,20 @@ async function renderMap(){
     L.circleMarker(g.a,{radius:6, color:col, weight:3, fillColor:'#fff', fillOpacity:1, opacity:dim?.3:1}).bindPopup(tip).addTo(MAPSTATE.layer);
     L.circleMarker(g.b,{radius:6, color:col, weight:3, fillColor:col, fillOpacity:dim?.3:1, opacity:dim?.3:1}).bindPopup(tip).addTo(MAPSTATE.layer);
     bounds.push(...g.line); if(isF) focusB.push(...g.line);
+    if(MAPSTATE.labels && !dim){
+      const det=[r.brigade&&('bryg. '+esc(r.brigade)), r.vehicle&&esc(r.vehicle)].filter(Boolean).join(' · ');
+      L.tooltip({permanent:true, direction:'center', className:'lbl lbl-ride', interactive:false})
+        .setLatLng(midPoint(g.line)).setContent(`<span class="ml" style="background:${col}">${esc(r.line||'?')}</span>${det?`<span class="md">${det}</span>`:''}`).addTo(MAPSTATE.layer);
+      for(const [nm,pt,t,kind] of [[r.from,g.a,r.dep,'od'],[r.to,g.b,r.arr,'do']]){ if(!nm) continue;
+        const k=nm+'|'+pt[0].toFixed(4)+pt[1].toFixed(4); const o=stopLbl.get(k)||{nm, pt, times:[], first:kind}; o.times.push(`${kind==='od'?'▶':'■'} ${(t||'').slice(0,5)}`); stopLbl.set(k,o); }
+    }
   });
+  for(const o of stopLbl.values())
+    L.tooltip({permanent:true, direction:o.first==='od'?'top':'bottom', offset:[0,o.first==='od'?-8:8], className:'lbl lbl-stop', interactive:false})
+      .setLatLng(o.pt).setContent(`<b>${esc(o.nm)}</b><span class="st">${o.times.join(' ')}</span>`).addTo(MAPSTATE.layer);
   const fb = focusB.length? focusB : bounds;
-  if(fb.length) map.fitBounds(fb,{padding:[28,28], maxZoom:16});
+  if(fb.length) map.fitBounds(fb,{padding: MAPSTATE.labels? [Math.min(90, map.getSize().x*0.22), 56] : [28,28], maxZoom:16});
+  requestAnimationFrame(declutter);
   list.innerHTML = (rides.length? `<h2>${rides.length} przejazdów${missing?` · ${missing} bez współrzędnych przystanków`:''}</h2>` : '<div class="empty">Brak przejazdów tego dnia</div>')
     + rides.map((r,i)=>rideCard(r).replace('class="card ride"', `class="card ride ${MAPSTATE.focus===rkey(r)?'focus':(MAPSTATE.focus?'dim':'')}"`)
         .replace('</div></div>', geos[i]? '</div></div>' : '</div><div class="sub">⚠ nie znaleziono przystanku w GTFS</div></div>')).join('');
