@@ -90,6 +90,7 @@ def main():
     trips_out = {}
     dep = {d: {} for d in days[1:]}
     feeds_ok = []
+    brig_out = {}     # "feed:blok|service" -> [numer brygady, linia]
     shapes_all = {}   # "feed:shape_id" -> [[lat, lon], ...]
     trip_shape = {}   # "feed:trip_id" -> "feed:shape_id"
     sched = {}   # route_key -> {"stops": [...], "si": {stop: idx}, "trips": {tid: {...}}, "act": {date: set(service)}}
@@ -135,6 +136,7 @@ def main():
                               r.get("stop_code", "").strip(), lat, lon, feed])
 
         trip_info = {}
+        blk_count = {}
         for r in read_csv(z, "trips.txt"):
             tid = r["trip_id"]
             rid = f"{feed}:{r['route_id']}"
@@ -143,7 +145,22 @@ def main():
             trip_info[tid] = (rid, hs, r.get("service_id"), block)
             if (r.get("shape_id") or "").strip():
                 trip_shape[f"{feed}:{tid}"] = f"{feed}:{r['shape_id'].strip()}"
-            trips_out[f"{feed}:{tid}"] = [ridx(rid), hidx(hs), block]
+            trips_out[f"{feed}:{tid}"] = [ridx(rid), hidx(hs), block, r.get("service_id") or ""]
+            if block:
+                bc = blk_count.setdefault((r.get("service_id") or "", block), {})
+                bc[rid] = bc.get(rid, 0) + 1
+
+        # brygada = kolejny numer bloku wśród bloków danej linii w danym typie dnia (np. blok 650 = 5. blok linii 18 → brygada 5)
+        groups = {}
+        for (sid, block), cnt in blk_count.items():
+            main = max(cnt.items(), key=lambda x: (x[1], x[0]))[0]
+            groups.setdefault((sid, main), []).append(block)
+        for (sid, main), blocks in groups.items():
+            blocks.sort(key=lambda b: (0, int(b)) if b.isdigit() else (1, b))
+            line = routes_out.get(main, [""])[0]
+            for i, b in enumerate(blocks):
+                brig_out[f"{feed}:{b}|{sid}"] = [i + 1, line]
+        blk_count.clear()
 
         act = {d: active_services(z, d) for d in days}
         any_act = set().union(*act.values()) if act else set()
@@ -206,7 +223,7 @@ def main():
     w = lambda name, obj: json.dump(obj, open(os.path.join(a.out, name), "w", encoding="utf-8"),
                                     ensure_ascii=False, separators=(",", ":"))
     w("stops.json", {"generated": gen, "feeds": feeds_ok, "routes": routes_out, "stops": stops_out})
-    w("trips.json", {"generated": gen, "routes": route_list, "heads": head_list, "trips": trips_out})
+    w("trips.json", {"generated": gen, "routes": route_list, "heads": head_list, "trips": trips_out, "brig": brig_out})
     # rozkład kursów per linia: data/sched/<linia>.json
     sdir = os.path.join(a.out, "sched"); os.makedirs(sdir, exist_ok=True)
     for f in os.listdir(sdir):
