@@ -272,6 +272,7 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
         <div class="field"><label>Bufor przystanku [m]</label><input class="f num" id="s-buffer" type="number" inputmode="numeric" min="5" max="200"></div>
         <div class="field"><label>Promień szukania pojazdu [m]</label><input class="f num" id="s-vrad" type="number" inputmode="numeric" min="10" max="500"></div>
       </div>
+      <div class="field"><label>Podpowiadaj odjazdy w ciągu [min]</label><input class="f num" id="s-depwin" type="number" inputmode="numeric" min="1" max="30"></div>
       <div class="field"><label>Pobieranie GTFS-RT</label>
         <select class="f" id="s-rtmode"><option value="auto">Automatycznie (bezpośrednio, a gdy się nie da – przez Apps Script)</option><option value="proxy">Zawsze przez Apps Script</option><option value="direct">Zawsze bezpośrednio z ZTP</option></select></div>
       <div class="field"><label>Źródła (kanały ZTP)</label>
@@ -279,7 +280,7 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
       <div class="field"><label>Numer taborowy z pola</label>
         <select class="f" id="s-vfield"><option value="auto">Automatycznie (label → license_plate → id)</option><option value="label">vehicle.label</option><option value="license_plate">vehicle.license_plate</option><option value="id">vehicle.id</option></select></div>
       <div class="field"><label>Brygada</label>
-        <select class="f" id="s-brule"><option value="auto">Automatycznie z bloku (np. 506 → linia 50, bryg. 6)</option><option value="block">Numer bloku bez zmian</option><option value="regex">Wyrażenie regularne na trip_id</option></select>
+        <select class="f" id="s-brule"><option value="auto">Automatycznie: kolejność bloku w linii (np. blok 650 = 5. blok linii 18 → bryg. 5)</option><option value="block">Numer bloku bez zmian</option><option value="regex">Wyrażenie regularne na trip_id</option></select>
         <input class="f" id="s-bregex" style="margin-top:8px" placeholder="np. block_(\d+)_ — grupa 1 = brygada" autocapitalize="off"></div>
       <div class="sw"><span>Brygadę zapisuj tylko dla tramwajów</span><input type="checkbox" id="s-btram"></div>
       <div class="field"><label>Numer słupka przystanku</label>
@@ -326,7 +327,7 @@ input.f:focus,select.f:focus,textarea.f:focus{border-color:var(--tram);box-shado
 const VERSION = '1.0.0';
 const RT_URL = 'https://gtfs.ztp.krakow.pl/';
 const LS_KEY = 'przejazdy.v1';
-const DEFAULTS = { backend:'', key:'', dataUrl:'./data/', buffer:20, vehRadius:60, rtMode:'auto',
+const DEFAULTS = { backend:'', key:'', dataUrl:'./data/', buffer:20, vehRadius:60, depWindow:3, rtMode:'auto',
   feeds:['A','T','M'], vehField:'auto', brigadeRule:'auto', brigadeRegex:'', brigadeTramsOnly:true, theme:'', postMode:'code2', postRegex:'', postMerge:true, fleetRules:'' };
 
 /* ---------------- stan ---------------- */
@@ -626,7 +627,7 @@ async function getFeeds(names, maxAge=15000){
 /* ---------------- interpretacja kursu ---------------- */
 function tripInfo(feed, tripId){
   const T=G.trips; if(!T||!tripId) return null; const t=T.trips[feed+':'+tripId]; if(!t) return null;
-  return { routeKey:T.routes[t[0]], headsign:T.heads[t[1]], block:t[2] };
+  return { routeKey:T.routes[t[0]], headsign:T.heads[t[1]], block:t[2], svc:t[3]||'' };
 }
 function lineOf(feed, routeId, info){
   const key = routeId ? feed+':'+routeId : info?.routeKey; const r = key && G.routes[key];
@@ -670,56 +671,70 @@ function resolveVehicle(raw, mode, feed){
 }
 function vehName(v){ const f=S.settings.vehField; if(f==='label') return v.label; if(f==='id') return v.id; if(f==='license_plate') return v.plate;
   return v.label || v.plate || v.id || ''; }
-function brigadeOf(tripId, info, line){
+function brigadeOf(tripId, info, line, feed){
   const st=S.settings;
   if(st.brigadeRule==='regex' && st.brigadeRegex){ try{ const m=new RegExp(st.brigadeRegex).exec(tripId||''); return m? (m[1]??m[0]) : ''; }catch(e){ return ''; } }
   let block = info?.block || ((tripId||'').match(/block_(\d+)/)||[])[1] || '';
   if(st.brigadeRule==='block' || !block) return block;
+  // numer brygady = kolejność bloku wśród bloków linii w danym typie dnia (wyliczane przy budowie trips.json)
+  const svc = info?.svc || ((tripId||'').match(/(service_[A-Za-z0-9]+)/)||[])[1] || '';
+  const br = G.trips?.brig?.[(feed||'')+':'+block+'|'+svc];
+  if(br) return String(br[0]);
   if(/^\d+$/.test(block) && /^\d+$/.test(line) && block.startsWith(line) && block.length-line.length>=1 && block.length-line.length<=2) return String(parseInt(block.slice(line.length),10));
   return block;
 }
 function sugFromTrip(o){   // o: {feed, tripId, routeId, veh, ...}
   const info=tripInfo(o.feed, o.tripId); const L=lineOf(o.feed, o.routeId, info);
   return { feed:o.feed, tripId:o.tripId||'', routeId:o.routeId||'', line:L.line, mode:L.mode, headsign:info?.headsign||'',
-    vehicle:resolveVehicle(vehName(o.veh||{}), L.mode, o.feed), vehicleId:o.veh?.id||'', brigade:brigadeOf(o.tripId, info, L.line), block:info?.block||'' };
+    vehicle:resolveVehicle(vehName(o.veh||{}), L.mode, o.feed), vehicleId:o.veh?.id||'', brigade:brigadeOf(o.tripId, info, L.line, o.feed), block:info?.block||'' };
 }
 
-async function suggestLines(pos, stopGroups, onUpdate){
-  const feeds=S.settings.feeds; const ids=new Set(stopGroups.flatMap(g=>g.ids)); const out=[]; const seen=new Set(); let rtOk=false;
-  const push=(s)=>{ const k=s.tripId? s.feed+s.tripId : s.feed+s.line+s.headsign+(s.eta||''); if(seen.has(k)) return; seen.add(k); out.push(s); };
-  const tripsP = ensureTrips();
-  // 1) pozycje pojazdów
+/** Podpowiedzi odjazdów: wszystkie słupki zespołu przystankowego (nie tylko najbliższy), sortowane po czasie do odjazdu.
+    Każda podpowiedź niesie słupek, z którego odjeżdża kurs – po wyborze linii przystanek początkowy ustawia się na ten słupek. */
+async function suggestLines(pos, stopGroups, onUpdate, horizonMin){
+  const st=S.settings, feeds=st.feeds, H=(horizonMin||st.depWindow||3)*60;
+  const names=new Set(stopGroups.flatMap(g=>g.ids.map(id=>stopById(id)?.name)).filter(Boolean));
+  const ids=new Set(G.stops.filter(x=>names.has(x.name) && dist(pos,x)<=400).map(x=>x.id));
+  const out=new Map(); let rtOk=false; const now=Date.now()/1000;
+  const list=()=>[...out.values()].sort((a,b)=>(a.etaS??0)-(b.etaS??0) || (a.d??1e9)-(b.d??1e9));
+  const tripsP=ensureTrips();
+  let vps=[];
   try{
-    const bufs = await getFeeds(feeds.map(f=>'VehiclePositions_'+f)); await tripsP; rtOk=true;
-    for(const f of feeds){ const b=bufs['VehiclePositions_'+f]; if(!b) continue;
-      for(const v of decodeVP(b,f)){ const d=dist(pos,v); const atStop = v.stopId && ids.has(f+':'+v.stopId);
-        if(d<=S.settings.vehRadius || (atStop && d<=200)) push({...sugFromTrip(v), d:Math.round(d), src:'gps', atStop, status:v.status, stopKey: v.stopId? f+':'+v.stopId : ''}); } }
+    const bufs=await getFeeds(feeds.map(f=>'VehiclePositions_'+f)); await tripsP; rtOk=true;
+    for(const f of feeds){ const b=bufs['VehiclePositions_'+f]; if(b) vps.push(...decodeVP(b,f)); }
+    for(const v of vps){ const d=dist(pos,v); const sk=v.stopId? v.feed+':'+v.stopId : ''; const atStop=ids.has(sk);
+      if((atStop && d<=200) || d<=st.vehRadius) out.set(v.feed+':'+(v.tripId||v.veh.id), {...sugFromTrip(v), d:Math.round(d), etaS:0, src:'gps', atStop, stopKey: atStop? sk : ''}); }
   }catch(e){ console.warn(e); }
-  out.sort((a,b)=>a.d-b.d); onUpdate && onUpdate(out.slice(), rtOk);
-  // 2) TripUpdates – odjazdy z tego przystanku w najbliższych minutach
-  if(rtOk && ids.size && out.length<2){
-    try{ const bufs=await getFeeds(feeds.map(f=>'TripUpdates_'+f), 30000); const now=Date.now()/1000;
+  onUpdate && onUpdate(list(), rtOk);
+  // prognozy odjazdów (GTFS-RT TripUpdates) ze wszystkich słupków zespołu
+  if(rtOk && ids.size){
+    try{
+      const bufs=await getFeeds(feeds.map(f=>'TripUpdates_'+f), 30000);
+      const vByTrip=new Map(vps.filter(v=>v.tripId).map(v=>[v.feed+':'+v.tripId, v]));
       for(const f of feeds){ const b=bufs['TripUpdates_'+f]; if(!b) continue;
-        for(const tu of decodeTU(b,f)){ const st=tu.stus.find(s=>ids.has(f+':'+s.stopId)); if(!st) continue;
-          const t=(st.dep||st.arr)?.time; if(!t || t<now-180 || t>now+480) continue;
-          push({...sugFromTrip(tu), eta:Math.round((t-now)/60), src:'tu'}); } }
+        for(const tu of decodeTU(b,f)){
+          const stu=tu.stus.find(x=>ids.has(f+':'+x.stopId) && ((x.dep||x.arr)?.time||0)>=now-90); if(!stu) continue;
+          const t=(stu.dep||stu.arr).time; const etaS=t-now; if(etaS>H) continue;
+          const key=f+':'+tu.tripId; const prev=out.get(key); const v=vByTrip.get(key);
+          const e={...sugFromTrip(tu), ...(prev||{}), src: prev? 'gps+tu' : 'tu', etaS:Math.max(0,etaS), stopKey:f+':'+stu.stopId, delay:(stu.dep||stu.arr).delay};
+          if(v && !prev){ const sv=sugFromTrip(v); Object.assign(e,{vehicle:sv.vehicle, vehicleId:sv.vehicleId, brigade:e.brigade||sv.brigade, d:Math.round(dist(pos,v))}); }
+          out.set(key, e); } }
     }catch(e){ console.warn(e); }
-    onUpdate && onUpdate(out.slice(), rtOk);
+    onUpdate && onUpdate(list(), rtOk);
   }
-  // 3) rozkład statyczny – gdy RT nie działa lub nic nie znaleziono
-  if(ids.size && (!rtOk || out.length===0)){
-    const dj = await loadDep(new Date());
-    if(dj){ const now=new Date(); const nm=now.getHours()*60+now.getMinutes(); const lst=[];
-      for(const id of ids){ const s=dj.stops[id]; if(!s) continue;
-        for(const k in s){ const [ri,hi]=k.split('|').map(Number); for(const m of s[k]){ if(m>=nm-5 && m<=nm+10){
+  // rozkład statyczny – gdy brak danych na żywo lub nic nie znaleziono
+  if(ids.size && (!rtOk || out.size===0)){
+    const dj=await loadDep(new Date());
+    if(dj){ const n=new Date(); const ns=n.getHours()*3600+n.getMinutes()*60+n.getSeconds();
+      for(const id of ids){ const so=dj.stops[id]; if(!so) continue;
+        for(const k in so){ const [ri,hi]=k.split('|').map(Number); for(const m of so[k]){ const etaS=m*60-ns; if(etaS<-60 || etaS>H) continue;
           const rk=dj.routes[ri]; const feed=rk.split(':')[0]; const r=G.routes[rk];
-          lst.push({feed, line:r?String(r[0]):'', mode:r&&(r[1]===0||r[1]===900)?'T':(feed==='T'?'T':'A'), headsign:dj.heads[hi], eta:m-nm,
-            sched:pad(Math.floor(m/60)%24)+':'+pad(m%60), src:'st', vehicle:'', brigade:'', tripId:''}); } } } }
-      lst.sort((a,b)=>Math.abs(a.eta)-Math.abs(b.eta)).forEach(push);
+          out.set('st:'+id+':'+k+':'+m, {feed, line:r?String(r[0]):'', mode:r&&(r[1]===0||r[1]===900)?'T':(feed==='T'?'T':'A'), headsign:dj.heads[hi],
+            etaS:Math.max(0,etaS), sched:pad(Math.floor(m/60)%24)+':'+pad(m%60), src:'st', vehicle:'', brigade:'', tripId:'', stopKey:id}); } } }
     }
-    onUpdate && onUpdate(out.slice(), rtOk);
+    onUpdate && onUpdate(list(), rtOk);
   }
-  return out;
+  return list();
 }
 
 /* ---------------- lokalizacja ---------------- */
@@ -819,7 +834,11 @@ function renderRide(){
     <div class="card" style="padding:4px 16px 16px;margin-top:12px" id="active-notes">${notesHtml(a.notes, m).replace('<label>Uwagi</label>','<label>Zdarzenia w trakcie jazdy</label>')}</div>
     <button class="go end" id="b-end"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>Zakończ przejazd</button>
     <div style="display:flex;gap:8px;max-width:340px;margin:0 auto"><button class="go ghost" id="b-edit-active">Popraw dane</button><button class="go ghost" id="b-cancel">Anuluj przejazd</button></div>`;
-    const upd=()=>{ const s=parseTime(a.dep); let d=(Math.floor(Date.now()/1000)-Math.floor(new Date(a.date+'T00:00:00').getTime()/1000))-s; if(d<0) d=0;
+    const upd=()=>{ let d;
+      if(a.depTs) d=Math.floor((Date.now()-a.depTs)/1000);                       // rzeczywisty upływ czasu (odporny na zmianę czasu)
+      else { const n=new Date(); d=(n.getHours()*3600+n.getMinutes()*60+n.getSeconds())-parseTime(a.dep);
+        const days=Math.round((new Date(fmtDate(n)+'T12:00:00')-new Date(a.date+'T12:00:00'))/864e5); d+=days*86400; }
+      if(d<0) d=0;
       const t=$('#timer'); if(t) t.textContent=fmtDur(d); };
     upd(); tick=setInterval(upd,1000);
     $('#b-end').onclick=endRide; $('#b-cancel').onclick=()=>{ if(confirm('Anulować bieżący przejazd?')){ S.active=null; save(); renderRide(); } };
@@ -879,11 +898,15 @@ function stopCandsHtml(groups, sel, extra){
   if(!items.length) return '';
   return `<div class="cands">${items.map(c=>`<button type="button" class="cand ${c.name===sel?'sel':''}" data-stop="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc(c.note)}</small></button>`).join('')}</div>`;
 }
+function etaTxt(e){ if(e==null) return ''; const m=Math.round(e/60); return e<45 ? 'teraz' : `za ${m} min`; }
 function sugHtml(list, selObj){
   if(!list.length) return '';
-  return list.slice(0,8).map((s,i)=>{
-    const k=String(i); const right = s.src==='gps' ? `<span class="src gps">${s.d} m</span>` : s.src==='tu' ? `<span class="src tu">${s.eta>=0?'za '+s.eta+' min':(-s.eta)+' min temu'}</span>` : `<span class="src st">${esc(s.sched)}</span>`;
-    const det=[s.vehicle&&(vIcon(s.line,s.mode)+' '+s.vehicle), s.brigade&&('bryg. '+s.brigade), s.src==='st'&&'rozkład', s.atStop&&'na przystanku'].filter(Boolean).join(' · ');
+  const W=(S.settings.depWindow||3)*60;
+  return list.slice(0,10).map((s,i)=>{
+    const k=String(i); const post=s.stopKey? postOf(stopById(s.stopKey)) : '';
+    const right = s.src==='st' ? `<span class="src st">${esc(s.sched)}</span>` : `<span class="src ${s.etaS<=W?'gps':'tu'}">${etaTxt(s.etaS)}</span>`;
+    const det=[post&&('słupek '+post), s.vehicle&&(vIcon(s.line,s.mode)+' '+s.vehicle), s.brigade&&('bryg. '+s.brigade), s.d!=null&&(s.d+' m'),
+      s.src==='st'&&'rozkład', s.atStop&&'na przystanku', s.delay>60&&('+'+Math.round(s.delay/60)+' min')].filter(Boolean).join(' · ');
     return `<button type="button" class="sug ${selObj===s?'sel':''}" data-sug="${k}"><span class="badge ${badgeCls(s.line,s.mode)}">${esc(s.line||'?')}</span>
       <span><div class="h">${s.headsign?'→ '+esc(s.headsign):esc(s.tripId||'kurs')}</div><div class="d">${esc(det)||'&nbsp;'}</div></span>${right}</button>`; }).join('');
 }
@@ -902,8 +925,9 @@ async function startRide(existing){
         <div class="status" id="st-gps">${ctx.gpsMsg||'<i class="spin"></i> ustalam pozycję…'}</div>
         ${stopCandsHtml(ctx.stops, d.from, extra)}</div>
       <div class="field"><label style="display:flex;justify-content:space-between;align-items:center">Linia – podpowiedzi <button type="button" class="btn sm" id="b-refresh" style="height:30px" ${ctx.busy?'disabled':''}>↻ Odśwież</button></label>
-        <div class="status">${ctx.rtMsg||'<i class="spin"></i> szukam pojazdów w pobliżu…'}</div>
-        ${sugHtml(ctx.sugs, ctx.selObj)}</div>
+        <div class="status">${ctx.rtMsg||'<i class="spin"></i> szukam odjazdów…'}</div>
+        ${sugHtml(ctx.sugs, ctx.selObj)}
+        <button type="button" class="btn sm" id="b-horizon" style="margin-top:8px">${ctx.horizon? `Tylko najbliższe (${S.settings.depWindow||3} min)` : 'Pokaż odjazdy do 15 min'}</button></div>
       <div class="row3">
         <div class="field"><label>Linia</label><input class="f num" id="f-line" value="${esc(d.line)}" autocapitalize="characters"></div>
         <div class="field"><label>Brygada</label><input class="f num" id="f-brig" value="${esc(d.brigade)}"></div>
@@ -927,9 +951,9 @@ async function startRide(existing){
       ctx.stops=near; draw();
       const inBuf = near.filter(g=>!g.out); const useStops = inBuf.length? inBuf : near.slice(0,1);
       await suggestLines(pos, useStops, (list, rtOk)=>{ keepInputs(ctx); ctx.sugs=list;
-        ctx.rtMsg = list.length ? (rtOk? 'dotknij, aby wybrać' : 'GTFS-RT niedostępny – podpowiedzi z rozkładu') : (rtOk? 'nie znaleziono pojazdu w pobliżu – odśwież, gdy podjedzie, albo wpisz ręcznie' : 'GTFS-RT niedostępny – wpisz ręcznie');
+        ctx.rtMsg = list.length ? (rtOk? 'najbliższe odjazdy ze wszystkich słupków – dotknij, aby wybrać' : 'GTFS-RT niedostępny – podpowiedzi z rozkładu') : (rtOk? `brak odjazdów w ciągu ${ctx.horizon?15:(S.settings.depWindow||3)} min – odśwież albo pokaż dalsze` : 'GTFS-RT niedostępny – wpisz ręcznie');
         if(ctx.selObj){ const same=list.find(x=>x.tripId && x.tripId===ctx.selObj.tripId); ctx.selObj=same||null; }
-        draw(); });
+        draw(); }, ctx.horizon? 15 : 0);
     }catch(e){ keepInputs(ctx); ctx.gpsMsg='⚠️ '+esc(e.message)+' – wpisz przystanek ręcznie'; ctx.rtMsg = ctx.rtMsg||'wpisz linię ręcznie';
       if(prevEndRecent && !ctx.draft.from) ctx.draft.from=prev.to; }
     ctx.busy=false; draw();
@@ -951,11 +975,12 @@ function bindStart(ctx){
   b.querySelectorAll('[data-sug]').forEach(x=>x.onclick=()=>{ readDraft(ctx); const s=ctx.sugs[+x.dataset.sug]; ctx.sel=x.dataset.sug; ctx.selObj=s;
     Object.assign(ctx.draft,{ routeKey:(s.feed&&s.routeId? s.feed+':'+s.routeId : (tripInfo(s.feed,s.tripId)?.routeKey||'')), line:s.line, mode:s.mode, headsign:s.headsign, vehicle:s.vehicle||'', vehicleId:s.vehicleId||'', tripId:s.tripId||'', feed:s.feed,
       brigade: (S.settings.brigadeTramsOnly && s.mode!=='T') ? '' : (s.brigade||'') });
-    // pojazd stoi na przystanku → jego stop_id wskazuje dokładny słupek
-    if(s.atStop && s.stopKey){ const st=stopById(s.stopKey); if(st) ctx.draft.from=stopLabel(st); }
+    // słupek, z którego odjeżdża wybrany kurs (prognoza GTFS-RT, pozycja pojazdu lub rozkład)
+    if(s.stopKey){ const st=stopById(s.stopKey); if(st) ctx.draft.from=stopLabel(st); }
     ctx.redraw(); });
   $('#b-x').onclick=()=>{ if(S.prepared && S.prepared.id===ctx.draft.id){ S.prepared=null; save(); renderRide(); } closeSheet(); };
   $('#b-refresh').onclick=()=>{ if(!ctx.busy) ctx.search(); };
+  $('#b-horizon').onclick=()=>{ if(ctx.busy) return; readDraft(ctx); ctx.horizon=!ctx.horizon; ctx.search(); };
   const finalize=()=>{ readDraft(ctx); const d=ctx.draft;
     d.mode = (ctx.selObj && d.line===ctx.selObj.line) ? ctx.selObj.mode : modeOf(d.line); return d; };
   $('#b-ok').onclick=()=>{ const d=finalize(); S.prepared={...d}; save(); closeSheet(); renderRide(); };
@@ -966,7 +991,7 @@ function bindStart(ctx){
 /** „Odjazd!” – zapisuje dokładną godzinę i rozpoczyna przejazd. */
 function depart(d, t){
   t=t||new Date();
-  S.active={...d, date:fmtDate(t), dep:fmtTime(t)}; S.prepared=null; save(); renderRide(); toast('Odjazd '+fmtTime(t)+' · miłej podróży '+vIcon(d.line,d.mode));
+  S.active={...d, date:fmtDate(t), dep:fmtTime(t), depTs:t.getTime()}; S.prepared=null; save(); renderRide(); toast('Odjazd '+fmtTime(t)+' · miłej podróży '+vIcon(d.line,d.mode));
   const id=S.active.id;
   fillSched({...S.active},'dep').then(x=>{ if(S.active && S.active.id===id){ S.active.schedDep=x.schedDep; S.active.schedInfo=x.schedInfo; save(); renderRide(); } });
   if(!S.active.vehicle) findVehicleAfterDepart(id);
@@ -1246,7 +1271,7 @@ function punctHtml(list){
 /* ---------------- widok: ustawienia ---------------- */
 function renderSet(){
   const s=S.settings; const v=(id,x)=>$('#'+id).value=x??'';
-  v('s-backend',s.backend); v('s-key',s.key); v('s-buffer',s.buffer); v('s-vrad',s.vehRadius); v('s-rtmode',s.rtMode); v('s-vfield',s.vehField);
+  v('s-backend',s.backend); v('s-key',s.key); v('s-buffer',s.buffer); v('s-vrad',s.vehRadius); v('s-depwin',s.depWindow||3); v('s-rtmode',s.rtMode); v('s-vfield',s.vehField);
   v('s-brule',s.brigadeRule); v('s-bregex',s.brigadeRegex); v('s-data',s.dataUrl); v('s-theme',s.theme);
   v('s-post',s.postMode); v('s-fleet',s.fleetRules); v('s-postre',s.postRegex); $('#s-postmerge').checked=!!s.postMerge;
   $('#s-postre').style.display = s.postMode==='idre' ? '' : 'none';
@@ -1260,7 +1285,7 @@ function renderSet(){
 function bindSet(){
   const s=S.settings; const on=(id,fn)=>$('#'+id).addEventListener('change',()=>{ fn($('#'+id)); save(); renderSet(); renderChips(); });
   on('s-backend',e=>s.backend=e.value.trim()); on('s-key',e=>s.key=e.value.trim());
-  on('s-buffer',e=>s.buffer=Math.max(5,+e.value||20)); on('s-vrad',e=>s.vehRadius=Math.max(10,+e.value||60));
+  on('s-buffer',e=>s.buffer=Math.max(5,+e.value||20)); on('s-vrad',e=>s.vehRadius=Math.max(10,+e.value||60)); on('s-depwin',e=>s.depWindow=Math.min(30,Math.max(1,+e.value||3)));
   on('s-rtmode',e=>{ s.rtMode=e.value; G.directOk=null; }); on('s-vfield',e=>s.vehField=e.value);
   on('s-brule',e=>s.brigadeRule=e.value); on('s-bregex',e=>s.brigadeRegex=e.value.trim());
   on('s-btram',e=>s.brigadeTramsOnly=e.checked);
@@ -1351,7 +1376,7 @@ async function diag(){
     let all=[]; for(const f of S.settings.feeds){ const b=bufs['VehiclePositions_'+f]; if(!b){ lines.push(`${f}: brak danych`); continue; } const v=decodeVP(b,f); lines.push(`${f}: ${v.length} pojazdów, ${(b.byteLength/1024).toFixed(0)} kB`); all.push(...v); }
     if(pos) all.forEach(v=>v.d=dist(pos,v)); all.sort((a,b)=>(a.d||0)-(b.d||0));
     for(const v of all.slice(0,8)){ const s=sugFromTrip(v);
-      lines.push(`\n— ${v.d!=null?Math.round(v.d)+' m':''} [${v.feed}]  linia ${s.line||'?'} → ${s.headsign}\n  vehicle.id=${v.veh.id} label=${v.veh.label} license_plate=${v.veh.plate}\n  trip_id=${v.tripId} route_id=${v.routeId}\n  blok=${s.block||'?'}  → brygada=${s.brigade||'?'}  nr tab.=${s.vehicle}\n  stop_id=${v.stopId} status=${v.status}`); }
+      lines.push(`\n— ${v.d!=null?Math.round(v.d)+' m':''} [${v.feed}]  linia ${s.line||'?'} → ${s.headsign}\n  vehicle.id=${v.veh.id} label=${v.veh.label} license_plate=${v.veh.plate}\n  trip_id=${v.tripId} route_id=${v.routeId}\n  blok=${s.block||'?'} (typ dnia ${tripInfo(v.feed,v.tripId)?.svc||((v.tripId||'').match(/(service_[A-Za-z0-9]+)/)||[])[1]||'?'})  → brygada=${s.brigade||'?'}  nr tab.=${s.vehicle}\n  stop_id=${v.stopId} status=${v.status}`); }
   }catch(e){ lines.push('BŁĄD: '+e.message); }
   el.innerHTML=`<div class="diag">${esc(lines.join('\n'))}</div>`;
 }
