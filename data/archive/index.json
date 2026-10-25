@@ -1,5 +1,5 @@
 {
-"generated": "2026-10-25T01:38:06",
+"generated": "2026-10-25T14:00:33",
 "lines": {
 "ZTP-A": [
 "102",
@@ -285,6 +285,30 @@
 "fetched": "2024-07-12",
 "ok": false,
 "error": "HTTP 401 GraphQL :: {\"error\":\"Unauthorized\"}"
+},
+{
+"feed": "A",
+"fetched": "2026-10-25",
+"from": "2026-10-25",
+"to": "2026-10-25",
+"ok": true,
+"src": "ztp"
+},
+{
+"feed": "T",
+"fetched": "2026-10-25",
+"from": "2026-10-25",
+"to": "2026-10-25",
+"ok": true,
+"src": "ztp"
+},
+{
+"feed": "M",
+"fetched": "2026-10-25",
+"from": "2026-10-25",
+"to": "2026-10-25",
+"ok": true,
+"src": "ztp"
 },
 {
 "feed": "A",
